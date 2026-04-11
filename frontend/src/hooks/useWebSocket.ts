@@ -8,9 +8,21 @@ export function useWebSocket(
 ) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const onMessageRef = useRef(onMessage);
+
+  // Keep the callback ref up to date without causing reconnects
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
   const connect = useCallback(() => {
     if (!isAuthenticated) return;
+    // Close existing connection before reconnecting
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
     try {
       const ws = new WebSocket(getWsUrl());
       wsRef.current = ws;
@@ -18,13 +30,14 @@ export function useWebSocket(
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data) as WSMessage;
-          onMessage(data);
+          onMessageRef.current(data);
         } catch {
           // ignore parse errors
         }
       };
 
       ws.onclose = () => {
+        wsRef.current = null;
         reconnectTimeout.current = setTimeout(connect, 3000);
       };
 
@@ -34,12 +47,16 @@ export function useWebSocket(
     } catch {
       reconnectTimeout.current = setTimeout(connect, 3000);
     }
-  }, [isAuthenticated, onMessage]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     connect();
     return () => {
-      if (wsRef.current) wsRef.current.close();
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
     };
   }, [connect]);
