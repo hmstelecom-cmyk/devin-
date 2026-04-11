@@ -78,8 +78,16 @@ SUPPORTED_LANGUAGES = {
     "si": "Sinhala",
 }
 
+# Map language codes that differ between our app and Google Translate API
+TRANSLATE_LANG_MAP = {
+    "he": "iw",
+    "zh-CN": "zh-CN",
+    "zh-TW": "zh-TW",
+}
+
 # Map for gTTS language codes (some differ from Google Translate)
 GTTS_LANG_MAP = {
+    "he": "iw",
     "zh-CN": "zh-CN",
     "zh-TW": "zh-TW",
 }
@@ -92,7 +100,9 @@ def translate_text(text: str, source_lang: str, target_lang: str) -> str:
     if not text or not text.strip():
         return text
     try:
-        translator = GoogleTranslator(source=source_lang, target=target_lang)
+        src = TRANSLATE_LANG_MAP.get(source_lang, source_lang)
+        tgt = TRANSLATE_LANG_MAP.get(target_lang, target_lang)
+        translator = GoogleTranslator(source=src, target=tgt)
         translated = translator.translate(text)
         return translated or text
     except Exception as e:
