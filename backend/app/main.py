@@ -32,6 +32,7 @@ from app.schemas import (
     ConversationCreate,
     ConversationResponse,
     LanguageResponse,
+    ForwardRequest,
 )
 from app.translation_service import (
     translate_text,
@@ -406,6 +407,110 @@ async def send_message(
                 break
         await manager.send_personal_message({"type": "new_message", "data": personalized}, member.id)
     return msg_response
+
+
+@app.post("/api/messages/{message_id}/forward")
+async def forward_message(
+    message_id: int,
+    forward_data: ForwardRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Forward a message to one or more conversations (max 5, like WhatsApp)."""
+    if len(forward_data.conversation_ids) > 5:
+        raise HTTPException(status_code=400, detail="Can only forward to up to 5 chats at a time")
+    if not forward_data.conversation_ids:
+        raise HTTPException(status_code=400, detail="Must specify at least one conversation")
+
+    # Get the original message
+    stmt = select(Message).where(Message.id == message_id).options(selectinload(Message.translations))
+    result = await db.execute(stmt)
+    original_msg = result.scalar_one_or_none()
+    if not original_msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Get original sender name for the "Forwarded" label
+    sender_result = await db.execute(select(User).where(User.id == original_msg.sender_id))
+    original_sender = sender_result.scalar_one_or_none()
+    forwarded_from = original_sender.display_name if original_sender else "Unknown"
+
+    forwarded_messages = []
+    for conv_id in forward_data.conversation_ids:
+        # Verify user is a member of target conversation
+        conv = await _get_conversation(conv_id, current_user, db)
+
+        # Create a new message in the target conversation
+        new_msg = Message(
+            conversation_id=conv_id,
+            sender_id=current_user.id,
+            content=original_msg.original_content or original_msg.content,
+            original_content=original_msg.original_content or original_msg.content,
+            original_language=original_msg.original_language,
+            message_type=original_msg.message_type,
+            media_url=original_msg.media_url,
+            media_filename=original_msg.media_filename,
+            is_forwarded=True,
+            forwarded_from_name=forwarded_from,
+        )
+        db.add(new_msg)
+        await db.flush()
+
+        # Translate for members of target conversation
+        translations = []
+        member_languages = set()
+        for member in conv.members:
+            if member.id != current_user.id:
+                member_languages.add(member.default_language)
+
+        text_content = original_msg.original_content or original_msg.content
+        if text_content and original_msg.message_type in ("text", "voice"):
+            for target_lang in member_languages:
+                if target_lang != original_msg.original_language:
+                    translated_text = translate_text(text_content, original_msg.original_language, target_lang)
+                    translated_audio_url = None
+                    if translated_text:
+                        audio_path = text_to_speech(translated_text, target_lang)
+                        if audio_path:
+                            translated_audio_url = f"/uploads/voice_translations/{os.path.basename(audio_path)}"
+                    trans = MessageTranslation(
+                        message_id=new_msg.id, language=target_lang,
+                        translated_text=translated_text, translated_audio_url=translated_audio_url,
+                    )
+                    db.add(trans)
+                    translations.append(TranslationResponse(
+                        language=target_lang, translated_text=translated_text, translated_audio_url=translated_audio_url,
+                    ))
+
+        conv.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(new_msg)
+
+        msg_response = MessageResponse(
+            id=new_msg.id, conversation_id=new_msg.conversation_id, sender_id=new_msg.sender_id,
+            sender_name=current_user.display_name, sender_avatar=current_user.avatar_url or "",
+            content=text_content, original_content=text_content,
+            original_language=original_msg.original_language,
+            message_type=new_msg.message_type, media_url=new_msg.media_url, media_filename=new_msg.media_filename,
+            is_forwarded=True, forwarded_from_name=forwarded_from,
+            is_read=False, created_at=new_msg.created_at, translations=translations,
+        )
+
+        # Send via WebSocket to conversation members
+        for member in conv.members:
+            if member.id == current_user.id:
+                continue
+            personalized = msg_response.model_dump(mode="json")
+            for t in translations:
+                if t.language == member.default_language:
+                    personalized["content"] = t.translated_text
+                    if t.translated_audio_url:
+                        personalized["translated_audio_url"] = t.translated_audio_url
+                    break
+            await manager.send_personal_message({"type": "new_message", "data": personalized}, member.id)
+
+        forwarded_messages.append(msg_response)
+
+    return {"forwarded": len(forwarded_messages), "messages": forwarded_messages}
 
 
 @app.put("/api/conversations/{conv_id}/messages/read")

@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Message, User, Conversation } from '../types';
-import { sendMessage, getMediaUrl, markRead } from '../services/api';
-import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download, X, Volume2, Share2, ExternalLink } from 'lucide-react';
+import { sendMessage, getMediaUrl, markRead, forwardMessage } from '../services/api';
+import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download, X, Volume2, Share2, ExternalLink, Forward, Check } from 'lucide-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
   messages: Message[];
   currentUser: User;
+  allConversations: Conversation[];
   onMessageSent: () => void;
   onBack: () => void;
   onSendTyping: () => void;
@@ -17,6 +18,7 @@ export default function ChatWindow({
   conversation,
   messages,
   currentUser,
+  allConversations,
   onMessageSent,
   onBack,
   onSendTyping,
@@ -31,6 +33,10 @@ export default function ChatWindow({
   const [speakingMsg, setSpeakingMsg] = useState<number | null>(null);
   const [mediaViewer, setMediaViewer] = useState<{ url: string; type: 'image' | 'video'; filename?: string } | null>(null);
   const [mediaMenu, setMediaMenu] = useState<{ url: string; filename: string; type: string; x: number; y: number } | null>(null);
+  const [forwardingMsg, setForwardingMsg] = useState<Message | null>(null);
+  const [selectedForwardConvs, setSelectedForwardConvs] = useState<number[]>([]);
+  const [forwardSearchQuery, setForwardSearchQuery] = useState('');
+  const [isForwarding, setIsForwarding] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -221,6 +227,39 @@ export default function ChatWindow({
     setMediaMenu({ url, filename, type, x: e.clientX, y: e.clientY });
   };
 
+  const openForwardDialog = (msg: Message) => {
+    setForwardingMsg(msg);
+    setSelectedForwardConvs([]);
+    setForwardSearchQuery('');
+  };
+
+  const toggleForwardConv = (convId: number) => {
+    setSelectedForwardConvs((prev) =>
+      prev.includes(convId) ? prev.filter((id) => id !== convId) : prev.length < 5 ? [...prev, convId] : prev
+    );
+  };
+
+  const handleForward = async () => {
+    if (!forwardingMsg || selectedForwardConvs.length === 0) return;
+    setIsForwarding(true);
+    try {
+      await forwardMessage(forwardingMsg.id, selectedForwardConvs);
+      setForwardingMsg(null);
+      setSelectedForwardConvs([]);
+      onMessageSent();
+    } catch {
+      alert('Failed to forward message');
+    } finally {
+      setIsForwarding(false);
+    }
+  };
+
+  const getConvDisplayName = (conv: Conversation): string => {
+    if (conv.name) return conv.name;
+    const others = conv.members.filter((m) => m.id !== currentUser.id);
+    return others.map((m) => m.display_name).join(', ') || 'Chat';
+  };
+
   const formatTime = (dateStr: string): string => {
     return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
@@ -239,13 +278,30 @@ export default function ChatWindow({
     return (
       <div key={msg.id} className={`flex mb-2 ${isMine ? 'justify-end' : 'justify-start'}`}>
         <div
-          className={`max-w-xs lg:max-w-md px-3 py-2 rounded-2xl shadow-sm relative ${
+          className={`max-w-xs lg:max-w-md px-3 py-2 rounded-2xl shadow-sm relative group/msg ${
             isMine
               ? 'rounded-br-md text-white'
               : 'bg-white rounded-bl-md text-gray-900'
           }`}
           style={isMine ? { backgroundColor: '#005c4b' } : {}}
         >
+          {/* Forward button - appears on hover */}
+          <button
+            onClick={() => openForwardDialog(msg)}
+            className={`absolute -top-2 ${isMine ? '-left-8' : '-right-8'} opacity-0 group-hover/msg:opacity-100 transition-opacity p-1 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-600 shadow-sm`}
+            title="Forward"
+          >
+            <Forward size={14} />
+          </button>
+
+          {/* Forwarded label */}
+          {msg.is_forwarded && (
+            <div className={`flex items-center gap-1 mb-1 text-[11px] italic ${isMine ? 'text-emerald-200' : 'text-gray-400'}`}>
+              <Forward size={10} />
+              <span>Forwarded{msg.forwarded_from_name ? ` from ${msg.forwarded_from_name}` : ''}</span>
+            </div>
+          )}
+
           {/* Sender name in groups */}
           {!isMine && conversation.is_group && (
             <p className="text-xs font-semibold mb-1" style={{ color: '#25d366' }}>
@@ -555,6 +611,119 @@ export default function ChatWindow({
               <img src={mediaViewer.url} alt="" className="max-w-full max-h-[85vh] object-contain rounded-lg" />
             ) : (
               <video src={mediaViewer.url} controls autoPlay className="max-w-full max-h-[85vh] rounded-lg" />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Forward Dialog */}
+      {forwardingMsg && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center" onClick={() => setForwardingMsg(null)}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b" style={{ backgroundColor: '#075e54' }}>
+              <div className="flex items-center gap-3">
+                <button onClick={() => setForwardingMsg(null)} className="text-white">
+                  <X size={20} />
+                </button>
+                <h3 className="text-white font-semibold">Forward message</h3>
+              </div>
+              {selectedForwardConvs.length > 0 && (
+                <span className="text-emerald-200 text-sm">{selectedForwardConvs.length} selected</span>
+              )}
+            </div>
+
+            {/* Search */}
+            <div className="px-4 py-2 border-b">
+              <input
+                type="text"
+                placeholder="Search conversations..."
+                value={forwardSearchQuery}
+                onChange={(e) => setForwardSearchQuery(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-100 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            {/* Message preview */}
+            <div className="px-4 py-2 bg-gray-50 border-b">
+              <p className="text-xs text-gray-400 mb-1">Forwarding:</p>
+              <div className="text-sm text-gray-700 truncate">
+                {forwardingMsg.message_type === 'text' ? (
+                  forwardingMsg.original_content || forwardingMsg.content
+                ) : forwardingMsg.message_type === 'voice' ? (
+                  '🎤 Voice message'
+                ) : forwardingMsg.message_type === 'image' ? (
+                  '📷 Photo'
+                ) : forwardingMsg.message_type === 'video' ? (
+                  '🎥 Video'
+                ) : (
+                  `📄 ${forwardingMsg.media_filename || 'Document'}`
+                )}
+              </div>
+            </div>
+
+            {/* Conversation list */}
+            <div className="flex-1 overflow-y-auto">
+              {allConversations
+                .filter((conv) => {
+                  if (!forwardSearchQuery) return true;
+                  const name = getConvDisplayName(conv).toLowerCase();
+                  return name.includes(forwardSearchQuery.toLowerCase());
+                })
+                .map((conv) => {
+                  const isSelected = selectedForwardConvs.includes(conv.id);
+                  const displayName = getConvDisplayName(conv);
+                  const others = conv.members.filter((m) => m.id !== currentUser.id);
+                  const avatarUser = others[0];
+
+                  return (
+                    <div
+                      key={conv.id}
+                      onClick={() => toggleForwardConv(conv.id)}
+                      className={`flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors ${
+                        isSelected ? 'bg-emerald-50' : ''
+                      }`}
+                    >
+                      {/* Avatar */}
+                      {avatarUser?.avatar_url ? (
+                        <img src={getMediaUrl(avatarUser.avatar_url)} alt="" className="w-10 h-10 rounded-full object-cover" />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm" style={{ backgroundColor: '#25d366' }}>
+                          {displayName.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)}
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm text-gray-900 truncate">{displayName}</p>
+                        {conv.id === conversation.id && (
+                          <p className="text-xs text-gray-400">Current chat</p>
+                        )}
+                      </div>
+                      {/* Checkbox */}
+                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
+                        isSelected ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+                      }`}>
+                        {isSelected && <Check size={14} className="text-white" />}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Forward button */}
+            {selectedForwardConvs.length > 0 && (
+              <div className="px-4 py-3 border-t bg-gray-50">
+                <button
+                  onClick={handleForward}
+                  disabled={isForwarding}
+                  className="w-full py-2.5 rounded-xl text-white font-semibold text-sm disabled:opacity-50 transition-colors"
+                  style={{ backgroundColor: '#075e54' }}
+                >
+                  {isForwarding ? 'Forwarding...' : `Forward to ${selectedForwardConvs.length} chat${selectedForwardConvs.length > 1 ? 's' : ''}`}
+                </button>
+              </div>
             )}
           </div>
         </div>

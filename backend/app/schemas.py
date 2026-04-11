@@ -58,6 +58,10 @@ class TranslationResponse(BaseModel):
         from_attributes = True
 
 
+class ForwardRequest(BaseModel):
+    conversation_ids: List[int]
+
+
 class MessageResponse(BaseModel):
     id: int
     conversation_id: int
@@ -70,6 +74,8 @@ class MessageResponse(BaseModel):
     message_type: str
     media_url: Optional[str] = None
     media_filename: Optional[str] = None
+    is_forwarded: bool = False
+    forwarded_from_name: Optional[str] = None
     is_read: bool
     created_at: datetime
     translations: List[TranslationResponse] = []

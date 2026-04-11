@@ -207,6 +207,7 @@ function App() {
             conversation={selectedConv}
             messages={messages}
             currentUser={currentUser}
+            allConversations={conversations}
             onMessageSent={handleMessageSent}
             onBack={() => setIsMobileChat(false)}
             onSendTyping={handleSendTyping}

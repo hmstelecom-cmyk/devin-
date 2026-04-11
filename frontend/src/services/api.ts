@@ -154,6 +154,19 @@ export async function getLanguages(): Promise<Language[]> {
   return res.json();
 }
 
+export async function forwardMessage(
+  messageId: number,
+  conversationIds: number[]
+): Promise<{ forwarded: number; messages: Message[] }> {
+  const res = await fetch(`${API_URL}/api/messages/${messageId}/forward`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversation_ids: conversationIds }),
+  });
+  if (!res.ok) throw new Error('Failed to forward message');
+  return res.json();
+}
+
 export async function uploadFile(file: File): Promise<{ url: string; filename: string; size: number }> {
   const formData = new FormData();
   formData.append('file', file);

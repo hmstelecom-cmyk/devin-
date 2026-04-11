@@ -27,6 +27,8 @@ export interface Message {
   message_type: 'text' | 'voice' | 'image' | 'video' | 'document';
   media_url: string | null;
   media_filename: string | null;
+  is_forwarded?: boolean;
+  forwarded_from_name?: string | null;
   is_read: boolean;
   created_at: string;
   translations: MessageTranslation[];
