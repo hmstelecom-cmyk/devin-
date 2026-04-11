@@ -145,7 +145,6 @@ function App() {
     setSelectedConv(conv);
     setIsMobileChat(true);
     setSideView('conversations');
-    loadMessages();
   };
 
   const handleMessageSent = () => {

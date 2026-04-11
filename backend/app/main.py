@@ -360,7 +360,12 @@ async def send_message(
         transcribed = transcribe_audio(filepath, current_user.default_language)
         if transcribed:
             content = transcribed
-            logger.info(f"Voice transcription: {transcribed[:100]}")
+            logger.info(f"Voice transcription success ({current_user.default_language}): {transcribed[:100]}")
+        else:
+            logger.warning(f"Voice transcription failed for {current_user.default_language}, content stays as: '{content}'")
+            # Set a default content so voice messages without transcription still get sent
+            if not content:
+                content = "Voice message"
 
     msg = Message(
         conversation_id=conv_id, sender_id=current_user.id, content=content,
@@ -377,13 +382,24 @@ async def send_message(
     if content and message_type in ("text", "voice"):
         for target_lang in member_languages:
             if target_lang != current_user.default_language:
-                translated_text = translate_text(content, current_user.default_language, target_lang)
+                try:
+                    translated_text = translate_text(content, current_user.default_language, target_lang)
+                    logger.info(f"Translation {current_user.default_language}->{target_lang}: '{content[:50]}' -> '{translated_text[:50] if translated_text else ''}'")
+                except Exception as e:
+                    logger.error(f"Translation failed {current_user.default_language}->{target_lang}: {e}")
+                    translated_text = content
                 translated_audio_url = None
                 # Generate TTS audio for both text and voice messages
                 if translated_text:
-                    audio_path = text_to_speech(translated_text, target_lang)
-                    if audio_path:
-                        translated_audio_url = f"/uploads/voice_translations/{os.path.basename(audio_path)}"
+                    try:
+                        audio_path = text_to_speech(translated_text, target_lang)
+                        if audio_path:
+                            translated_audio_url = f"/uploads/voice_translations/{os.path.basename(audio_path)}"
+                            logger.info(f"TTS generated for {target_lang}: {translated_audio_url}")
+                        else:
+                            logger.warning(f"TTS returned empty path for {target_lang}")
+                    except Exception as e:
+                        logger.error(f"TTS failed for {target_lang}: {e}")
                 trans = MessageTranslation(
                     message_id=msg.id, language=target_lang,
                     translated_text=translated_text, translated_audio_url=translated_audio_url,
@@ -644,6 +660,16 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
                         )).values(is_read=True)
                     )
                     await db.commit()
+                    # Notify other members that messages were read
+                    conv_stmt = select(Conversation).where(Conversation.id == conv_id).options(selectinload(Conversation.members))
+                    conv_result = await db.execute(conv_stmt)
+                    conv = conv_result.scalar_one_or_none()
+                    if conv:
+                        for member in conv.members:
+                            if member.id != user_id:
+                                await manager.send_personal_message(
+                                    {"type": "read", "data": {"conversation_id": conv_id, "user_id": user_id}}, member.id,
+                                )
                     break
     except WebSocketDisconnect:
         manager.disconnect(user_id)
