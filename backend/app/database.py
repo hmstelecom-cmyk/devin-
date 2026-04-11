@@ -27,3 +27,16 @@ async def get_db():
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Migrate existing tables: add new columns if they don't exist
+        from sqlalchemy import text, inspect as sa_inspect
+
+        def _migrate(connection):
+            inspector = sa_inspect(connection)
+            if "messages" in inspector.get_table_names():
+                existing_cols = {c["name"] for c in inspector.get_columns("messages")}
+                if "is_forwarded" not in existing_cols:
+                    connection.execute(text("ALTER TABLE messages ADD COLUMN is_forwarded BOOLEAN DEFAULT 0"))
+                if "forwarded_from_name" not in existing_cols:
+                    connection.execute(text("ALTER TABLE messages ADD COLUMN forwarded_from_name VARCHAR(100)"))
+
+        await conn.run_sync(_migrate)
