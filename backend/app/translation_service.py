@@ -5,6 +5,7 @@ import uuid
 import logging
 import subprocess
 import speech_recognition as sr
+import imageio_ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -148,8 +149,9 @@ def transcribe_audio(filepath: str, source_lang: str = "en") -> str:
     try:
         # Convert to WAV using ffmpeg (handles webm, ogg, mp3, etc.)
         wav_path = filepath.rsplit(".", 1)[0] + "_converted.wav"
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         result = subprocess.run(
-            ["ffmpeg", "-y", "-i", filepath, "-ar", "16000", "-ac", "1", "-f", "wav", wav_path],
+            [ffmpeg_exe, "-y", "-i", filepath, "-ar", "16000", "-ac", "1", "-f", "wav", wav_path],
             capture_output=True, timeout=30,
         )
         if result.returncode != 0:

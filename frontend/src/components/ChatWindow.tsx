@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Message, User, Conversation } from '../types';
 import { sendMessage, getMediaUrl, markRead, forwardMessage } from '../services/api';
-import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download, X, Volume2, Share2, ExternalLink, Forward, Check } from 'lucide-react';
+import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download, X, Volume2, Share2, ExternalLink, Forward, Check, CheckCheck } from 'lucide-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -344,92 +344,85 @@ export default function ChatWindow({
           )}
 
           {/* Voice message */}
-          {msg.message_type === 'voice' && (
-            <div>
-              {/* Translated audio player - shown to recipient when translation available */}
-              {!isMine && isTranslated && (msg.translated_audio_url || msg.translations?.find((t) => t.language === currentUser.default_language)?.translated_audio_url) && !showingOriginal && (
-                <div className="flex items-center gap-2 mb-1">
-                  <button
-                    onClick={() => {
-                      const transAudioUrl = msg.translated_audio_url || msg.translations?.find((t) => t.language === currentUser.default_language)?.translated_audio_url || '';
-                      playAudio(transAudioUrl, msg.id);
-                    }}
-                    className="w-8 h-8 rounded-full flex items-center justify-center bg-emerald-100"
-                  >
-                    {playingAudio === msg.id ? (
-                      <Pause size={14} className="text-emerald-600" />
-                    ) : (
-                      <Play size={14} className="text-emerald-600" />
-                    )}
-                  </button>
-                  <div className="flex-1">
-                    <div className="h-1 rounded-full bg-emerald-200">
-                      <div className="h-1 rounded-full w-1/2 bg-emerald-500" />
-                    </div>
-                    <p className="text-[10px] mt-0.5 text-emerald-600">🌐 Translated voice</p>
-                  </div>
-                  <Volume2 size={14} className="text-emerald-500" />
-                </div>
-              )}
+          {msg.message_type === 'voice' && (() => {
+            const translatedAudioUrl = msg.translated_audio_url || msg.translations?.find((t) => t.language === currentUser.default_language)?.translated_audio_url || '';
+            const hasTranslatedAudio = !isMine && isTranslated && !!translatedAudioUrl;
+            const translatedPlayId = msg.id + 100000; // unique ID for translated audio player
 
-              {/* Original audio player - always shown to sender, shown to recipient when toggled or no translation */}
-              {(isMine || showingOriginal || !isTranslated) && (
-                <div className="flex items-center gap-2">
+            return (
+              <div>
+                {/* Translated voice player - always visible for recipient when translation exists */}
+                {hasTranslatedAudio && (
+                  <div className="mb-2">
+                    <div className="flex items-center gap-2 bg-emerald-50 rounded-lg p-2">
+                      <button
+                        onClick={() => playAudio(translatedAudioUrl, translatedPlayId)}
+                        className="w-9 h-9 rounded-full flex items-center justify-center bg-emerald-500 shadow-sm flex-shrink-0"
+                      >
+                        {playingAudio === translatedPlayId ? (
+                          <Pause size={16} className="text-white" />
+                        ) : (
+                          <Play size={16} className="text-white ml-0.5" />
+                        )}
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="h-1.5 rounded-full bg-emerald-200">
+                          <div className={`h-1.5 rounded-full bg-emerald-500 transition-all ${playingAudio === translatedPlayId ? 'w-1/2' : 'w-0'}`} />
+                        </div>
+                        <p className="text-[10px] mt-0.5 text-emerald-600 font-medium">🌐 Translated voice</p>
+                      </div>
+                      <Volume2 size={14} className="text-emerald-500 flex-shrink-0" />
+                    </div>
+                    {/* Translated text */}
+                    {msg.content && msg.content !== 'Voice message' && (
+                      <p className="text-xs mt-1 opacity-70 italic px-1">
+                        "{msg.content}"
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Original voice player - always visible */}
+                <div className={`flex items-center gap-2 ${hasTranslatedAudio ? 'bg-gray-50 rounded-lg p-2' : ''}`}>
                   <button
                     onClick={() => playAudio(msg.media_url || '', msg.id)}
-                    className={`w-8 h-8 rounded-full flex items-center justify-center ${isMine ? 'bg-emerald-600' : 'bg-emerald-100'}`}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm ${
+                      isMine ? 'bg-emerald-600' : hasTranslatedAudio ? 'bg-gray-400' : 'bg-emerald-500'
+                    }`}
                   >
                     {playingAudio === msg.id ? (
-                      <Pause size={14} className={isMine ? 'text-white' : 'text-emerald-600'} />
+                      <Pause size={16} className="text-white" />
                     ) : (
-                      <Play size={14} className={isMine ? 'text-white' : 'text-emerald-600'} />
+                      <Play size={16} className="text-white ml-0.5" />
                     )}
                   </button>
-                  <div className="flex-1">
-                    <div className={`h-1 rounded-full ${isMine ? 'bg-emerald-600' : 'bg-emerald-200'}`}>
-                      <div className={`h-1 rounded-full w-1/2 ${isMine ? 'bg-emerald-300' : 'bg-emerald-500'}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className={`h-1.5 rounded-full ${isMine ? 'bg-emerald-700' : 'bg-gray-200'}`}>
+                      <div className={`h-1.5 rounded-full transition-all ${isMine ? 'bg-emerald-300' : 'bg-gray-500'} ${playingAudio === msg.id ? 'w-1/2' : 'w-0'}`} />
                     </div>
-                    {!isMine && showingOriginal && isTranslated && (
-                      <p className="text-[10px] mt-0.5 text-gray-400">🎤 Original voice</p>
-                    )}
+                    <p className={`text-[10px] mt-0.5 ${isMine ? 'text-emerald-200' : 'text-gray-400'} font-medium`}>
+                      {hasTranslatedAudio ? '🎤 Original voice' : '🎤 Voice message'}
+                    </p>
                   </div>
-                  <Mic size={14} className={isMine ? 'text-emerald-300' : 'text-emerald-500'} />
+                  <Mic size={14} className={isMine ? 'text-emerald-300' : 'text-gray-400'} />
                 </div>
-              )}
 
-              {/* Transcribed text (translated or original) */}
-              {msg.content && msg.content !== 'Voice message' && (
-                <p className="text-xs mt-1 opacity-80 italic">
-                  "{showingOriginal ? msg.original_content : msg.content}"
-                </p>
-              )}
+                {/* Original text - show for sender, or when no translated audio and has transcription */}
+                {!hasTranslatedAudio && msg.content && msg.content !== 'Voice message' && (
+                  <p className={`text-xs mt-1 opacity-70 italic px-1 ${isMine ? '' : ''}`}>
+                    "{msg.content}"
+                  </p>
+                )}
 
-              {/* Toggle original/translated controls */}
-              {isTranslated && (
-                <div className="flex items-center gap-2 mt-1">
-                  <button
-                    onClick={() => setShowOriginal(showingOriginal ? null : msg.id)}
-                    className={`flex items-center gap-1 text-xs ${isMine ? 'text-emerald-200' : 'text-emerald-600'} hover:underline`}
-                  >
-                    <Globe size={11} />
-                    {showingOriginal ? 'Show translation' : 'Show original'}
-                  </button>
-                  {!showingOriginal && (
-                    <button
-                      onClick={() => speakMessage(msg)}
-                      className={`flex items-center gap-1 text-xs ${
-                        speakingMsg === msg.id ? 'text-emerald-700' : 'text-emerald-600'
-                      } hover:underline`}
-                      title="Listen to translated text"
-                    >
-                      <Volume2 size={11} className={speakingMsg === msg.id ? 'animate-pulse' : ''} />
-                      {speakingMsg === msg.id ? 'Playing...' : 'Listen'}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+                {/* Show original text toggle for recipient with translation */}
+                {hasTranslatedAudio && msg.original_content && msg.original_content !== 'Voice message' && (
+                  <p className="text-xs mt-1 opacity-60 italic px-1 text-gray-500">
+                    "{msg.original_content}"
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Image - opens in-app viewer */}
           {msg.message_type === 'image' && msg.media_url && (
@@ -486,11 +479,15 @@ export default function ChatWindow({
             </div>
           )}
 
-          {/* Timestamp */}
-          <p className={`text-right mt-1 text-[10px] ${isMine ? 'text-emerald-200' : 'text-gray-400'}`}>
-            {formatTime(msg.created_at)}
+          {/* Timestamp + read receipts */}
+          <p className={`text-right mt-1 text-[10px] flex items-center justify-end gap-0.5 ${isMine ? 'text-emerald-200' : 'text-gray-400'}`}>
+            <span>{formatTime(msg.created_at)}</span>
             {isMine && (
-              <span className="ml-1">{msg.is_read ? '✓✓' : '✓'}</span>
+              msg.is_read ? (
+                <CheckCheck size={14} className="text-blue-400" />
+              ) : (
+                <CheckCheck size={14} className={isMine ? 'text-emerald-300/70' : 'text-gray-400'} />
+              )
             )}
           </p>
         </div>

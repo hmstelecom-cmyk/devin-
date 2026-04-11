@@ -7,6 +7,7 @@ import ConversationList from './components/ConversationList';
 import ChatWindow from './components/ChatWindow';
 import NewChatDialog from './components/NewChatDialog';
 import SettingsPanel from './components/SettingsPanel';
+import InstallPrompt from './components/InstallPrompt';
 
 type View = 'conversations' | 'newchat' | 'settings';
 
@@ -86,6 +87,16 @@ function App() {
             setTypingUsers((prev) => prev.filter((id) => id !== data.user_id));
           }, 3000);
         }
+      } else if (msg.type === 'read') {
+        const data = msg.data as { conversation_id: number; user_id: number };
+        if (selectedConv && data.conversation_id === selectedConv.id) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.sender_id === currentUser?.id ? { ...m, is_read: true } : m
+            )
+          );
+        }
+        loadConversations();
       } else if (msg.type === 'online_status') {
         const data = msg.data as { user_id: number; is_online: boolean };
         setConversations((prev) =>
@@ -237,6 +248,7 @@ function App() {
           </div>
         )}
       </div>
+      <InstallPrompt />
     </div>
   );
 }

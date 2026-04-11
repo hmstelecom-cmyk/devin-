@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Conversation, User } from '../types';
-import { Search, MessageSquarePlus, Settings, LogOut } from 'lucide-react';
+import { Search, MessageSquarePlus, Settings, LogOut, CheckCheck } from 'lucide-react';
 
 interface ConversationListProps {
   conversations: Conversation[];
@@ -144,18 +144,23 @@ export default function ConversationList({
                     )}
                   </div>
                   <div className="flex items-center justify-between mt-0.5">
-                    <p className="text-sm text-gray-500 truncate">
-                      {conv.last_message
-                        ? conv.last_message.message_type === 'voice'
-                          ? '🎤 Voice message'
-                          : conv.last_message.message_type === 'image'
-                          ? '📷 Photo'
-                          : conv.last_message.message_type === 'video'
-                          ? '🎥 Video'
-                          : conv.last_message.message_type === 'document'
-                          ? '📄 Document'
-                          : conv.last_message.content
-                        : 'No messages yet'}
+                    <p className="text-sm text-gray-500 truncate flex items-center gap-1">
+                      {conv.last_message && conv.last_message.sender_id === currentUser.id && (
+                        <CheckCheck size={14} className={`flex-shrink-0 ${conv.last_message.is_read ? 'text-blue-500' : 'text-gray-400'}`} />
+                      )}
+                      <span className="truncate">
+                        {conv.last_message
+                          ? conv.last_message.message_type === 'voice'
+                            ? '🎤 Voice message'
+                            : conv.last_message.message_type === 'image'
+                            ? '📷 Photo'
+                            : conv.last_message.message_type === 'video'
+                            ? '🎥 Video'
+                            : conv.last_message.message_type === 'document'
+                            ? '📄 Document'
+                            : conv.last_message.content
+                          : 'No messages yet'}
+                      </span>
                     </p>
                     {conv.unread_count > 0 && (
                       <span className="ml-2 flex-shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold text-white" style={{ backgroundColor: '#25d366' }}>
