@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
-import { updateProfile, getLanguages } from '../services/api';
+import { useState, useEffect, useRef } from 'react';
+import { updateProfile, getLanguages, getMediaUrl } from '../services/api';
 import type { User, Language } from '../types';
-import { ArrowLeft, Globe, User as UserIcon, MessageSquare, Save } from 'lucide-react';
+import { ArrowLeft, Globe, User as UserIcon, MessageSquare, Save, Camera } from 'lucide-react';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 interface SettingsPanelProps {
   user: User;
@@ -16,6 +18,9 @@ export default function SettingsPanel({ user, onClose, onUserUpdate }: SettingsP
   const [languages, setLanguages] = useState<Language[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState(user.avatar_url);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getLanguages().then(setLanguages).catch(() => {});
@@ -39,6 +44,31 @@ export default function SettingsPanel({ user, onClose, onUserUpdate }: SettingsP
     }
   };
 
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingAvatar(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/api/upload/avatar`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+      setAvatarUrl(data.avatar_url);
+      const updated = await updateProfile({ avatar_url: data.avatar_url });
+      onUserUpdate(updated);
+    } catch {
+      alert('Failed to upload avatar');
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
   const getInitials = (name: string): string => {
     return name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
   };
@@ -55,10 +85,36 @@ export default function SettingsPanel({ user, onClose, onUserUpdate }: SettingsP
       <div className="flex-1 overflow-y-auto">
         {/* Profile section */}
         <div className="bg-white p-6 flex flex-col items-center border-b border-gray-100">
-          <div className="w-24 h-24 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-4" style={{ backgroundColor: '#25d366' }}>
-            {getInitials(displayName)}
+          <div className="relative">
+            {avatarUrl ? (
+              <img src={getMediaUrl(avatarUrl)} alt="" className="w-24 h-24 rounded-full object-cover" />
+            ) : (
+              <div className="w-24 h-24 rounded-full flex items-center justify-center text-white text-2xl font-bold" style={{ backgroundColor: '#25d366' }}>
+                {getInitials(displayName)}
+              </div>
+            )}
+            <button
+              onClick={() => avatarInputRef.current?.click()}
+              disabled={uploadingAvatar}
+              className="absolute bottom-0 right-0 w-8 h-8 rounded-full flex items-center justify-center text-white shadow-lg"
+              style={{ backgroundColor: '#075e54' }}
+              title="Change profile photo"
+            >
+              {uploadingAvatar ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Camera size={16} />
+              )}
+            </button>
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleAvatarUpload}
+            />
           </div>
-          <p className="text-lg font-semibold text-gray-900">{user.display_name}</p>
+          <p className="text-lg font-semibold text-gray-900 mt-4">{user.display_name}</p>
           <p className="text-sm text-gray-500">@{user.username}</p>
         </div>
 

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Message, User, Conversation } from '../types';
 import { sendMessage, getMediaUrl, markRead } from '../services/api';
-import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download } from 'lucide-react';
+import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download, X, Volume2, Share2, ExternalLink } from 'lucide-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -28,11 +28,15 @@ export default function ChatWindow({
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showOriginal, setShowOriginal] = useState<number | null>(null);
   const [playingAudio, setPlayingAudio] = useState<number | null>(null);
+  const [speakingMsg, setSpeakingMsg] = useState<number | null>(null);
+  const [mediaViewer, setMediaViewer] = useState<{ url: string; type: 'image' | 'video'; filename?: string } | null>(null);
+  const [mediaMenu, setMediaMenu] = useState<{ url: string; filename: string; type: string; x: number; y: number } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const typingTimeout = useRef<ReturnType<typeof setTimeout>>();
 
   const otherMembers = conversation.members.filter((m) => m.id !== currentUser.id);
@@ -46,6 +50,15 @@ export default function ChatWindow({
   useEffect(() => {
     markRead(conversation.id).catch(() => {});
   }, [conversation.id, messages.length]);
+
+  // Close media menu on click outside
+  useEffect(() => {
+    const handleClick = () => setMediaMenu(null);
+    if (mediaMenu) {
+      document.addEventListener('click', handleClick);
+      return () => document.removeEventListener('click', handleClick);
+    }
+  }, [mediaMenu]);
 
   const handleSend = async () => {
     if (!text.trim() || sending) return;
@@ -145,6 +158,69 @@ export default function ChatWindow({
     audio.onended = () => setPlayingAudio(null);
   };
 
+  const speakMessage = (msg: Message) => {
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
+    if (speakingMsg === msg.id) {
+      setSpeakingMsg(null);
+      return;
+    }
+    let audioUrl = msg.translated_audio_url;
+    if (!audioUrl && msg.translations) {
+      const trans = msg.translations.find((t) => t.language === currentUser.default_language);
+      if (trans?.translated_audio_url) {
+        audioUrl = trans.translated_audio_url;
+      }
+    }
+    if (audioUrl) {
+      const audio = new Audio(getMediaUrl(audioUrl));
+      ttsAudioRef.current = audio;
+      setSpeakingMsg(msg.id);
+      audio.play();
+      audio.onended = () => { setSpeakingMsg(null); ttsAudioRef.current = null; };
+    } else {
+      const utterance = new SpeechSynthesisUtterance(msg.content);
+      utterance.lang = currentUser.default_language;
+      setSpeakingMsg(msg.id);
+      utterance.onend = () => setSpeakingMsg(null);
+      speechSynthesis.speak(utterance);
+    }
+  };
+
+  const openMediaViewer = (url: string, type: 'image' | 'video', filename?: string) => {
+    setMediaViewer({ url: getMediaUrl(url), type, filename });
+  };
+
+  const downloadMedia = (url: string, filename: string) => {
+    const link = document.createElement('a');
+    link.href = getMediaUrl(url);
+    link.download = filename;
+    link.target = '_blank';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const shareMedia = async (url: string, filename: string) => {
+    const fullUrl = getMediaUrl(url);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: filename, url: fullUrl });
+      } catch { /* User cancelled */ }
+    } else {
+      await navigator.clipboard.writeText(fullUrl);
+      alert('Link copied to clipboard!');
+    }
+  };
+
+  const showMediaOptions = (e: React.MouseEvent, url: string, filename: string, type: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMediaMenu({ url, filename, type, x: e.clientX, y: e.clientY });
+  };
+
   const formatTime = (dateStr: string): string => {
     return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
@@ -183,15 +259,31 @@ export default function ChatWindow({
               <p className="text-sm whitespace-pre-wrap break-words">
                 {showingOriginal ? msg.original_content : msg.content}
               </p>
-              {isTranslated && (
-                <button
-                  onClick={() => setShowOriginal(showingOriginal ? null : msg.id)}
-                  className={`flex items-center gap-1 mt-1 text-xs ${isMine ? 'text-emerald-200' : 'text-emerald-600'} hover:underline`}
-                >
-                  <Globe size={11} />
-                  {showingOriginal ? 'Show translation' : 'Show original'}
-                </button>
-              )}
+              <div className="flex items-center gap-2 mt-1">
+                {isTranslated && (
+                  <button
+                    onClick={() => setShowOriginal(showingOriginal ? null : msg.id)}
+                    className={`flex items-center gap-1 text-xs ${isMine ? 'text-emerald-200' : 'text-emerald-600'} hover:underline`}
+                  >
+                    <Globe size={11} />
+                    {showingOriginal ? 'Show translation' : 'Show original'}
+                  </button>
+                )}
+                {!isMine && (
+                  <button
+                    onClick={() => speakMessage(msg)}
+                    className={`flex items-center gap-1 text-xs ${
+                      speakingMsg === msg.id
+                        ? (isMine ? 'text-emerald-100' : 'text-emerald-700')
+                        : (isMine ? 'text-emerald-200' : 'text-emerald-600')
+                    } hover:underline`}
+                    title="Listen to message"
+                  >
+                    <Volume2 size={11} className={speakingMsg === msg.id ? 'animate-pulse' : ''} />
+                    {speakingMsg === msg.id ? 'Playing...' : 'Listen'}
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -236,43 +328,59 @@ export default function ChatWindow({
             </div>
           )}
 
-          {/* Image */}
+          {/* Image - opens in-app viewer */}
           {msg.message_type === 'image' && msg.media_url && (
-            <div>
+            <div className="relative group">
               <img
                 src={getMediaUrl(msg.media_url)}
                 alt="Shared image"
                 className="rounded-lg max-w-full cursor-pointer"
-                onClick={() => window.open(getMediaUrl(msg.media_url!), '_blank')}
+                onClick={() => openMediaViewer(msg.media_url!, 'image', msg.media_filename || 'image')}
               />
+              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                <button
+                  onClick={(e) => showMediaOptions(e, msg.media_url!, msg.media_filename || 'image', 'image')}
+                  className="p-1.5 bg-black/50 rounded-full text-white hover:bg-black/70"
+                  title="More options"
+                >
+                  <Share2 size={14} />
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Video */}
+          {/* Video - plays in-app */}
           {msg.message_type === 'video' && msg.media_url && (
-            <div>
+            <div className="relative group">
               <video
                 src={getMediaUrl(msg.media_url)}
                 controls
                 className="rounded-lg max-w-full"
               />
+              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                <button
+                  onClick={(e) => showMediaOptions(e, msg.media_url!, msg.media_filename || 'video', 'video')}
+                  className="p-1.5 bg-black/50 rounded-full text-white hover:bg-black/70"
+                  title="More options"
+                >
+                  <Share2 size={14} />
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Document */}
+          {/* Document - in-app options menu */}
           {msg.message_type === 'document' && msg.media_url && (
-            <a
-              href={getMediaUrl(msg.media_url)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={`flex items-center gap-2 p-2 rounded-lg ${isMine ? 'bg-emerald-700' : 'bg-gray-100'}`}
+            <div
+              className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer ${isMine ? 'bg-emerald-700' : 'bg-gray-100'}`}
+              onClick={(e) => showMediaOptions(e, msg.media_url!, msg.media_filename || 'document', 'document')}
             >
               <FileText size={24} className={isMine ? 'text-emerald-200' : 'text-emerald-600'} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm truncate">{msg.media_filename || 'Document'}</p>
               </div>
-              <Download size={16} className={isMine ? 'text-emerald-200' : 'text-emerald-600'} />
-            </a>
+              <Share2 size={16} className={isMine ? 'text-emerald-200' : 'text-emerald-600'} />
+            </div>
           )}
 
           {/* Timestamp */}
@@ -403,6 +511,87 @@ export default function ChatWindow({
       </div>
 
       <input ref={fileInputRef} type="file" className="hidden" />
+
+      {/* In-app Media Viewer Modal */}
+      {mediaViewer && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center" onClick={() => setMediaViewer(null)}>
+          <div className="absolute top-4 right-4 flex gap-3 z-10">
+            <button
+              onClick={(e) => { e.stopPropagation(); downloadMedia(mediaViewer.url, mediaViewer.filename || 'file'); }}
+              className="p-2 bg-white/20 rounded-full text-white hover:bg-white/30 transition-colors"
+              title="Download"
+            >
+              <Download size={20} />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); shareMedia(mediaViewer.url, mediaViewer.filename || 'file'); }}
+              className="p-2 bg-white/20 rounded-full text-white hover:bg-white/30 transition-colors"
+              title="Share"
+            >
+              <Share2 size={20} />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); window.open(mediaViewer.url, '_blank'); }}
+              className="p-2 bg-white/20 rounded-full text-white hover:bg-white/30 transition-colors"
+              title="Open in new tab"
+            >
+              <ExternalLink size={20} />
+            </button>
+            <button
+              onClick={() => setMediaViewer(null)}
+              className="p-2 bg-white/20 rounded-full text-white hover:bg-white/30 transition-colors"
+              title="Close"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          {mediaViewer.filename && (
+            <div className="absolute top-4 left-4 text-white text-sm bg-black/50 px-3 py-1 rounded-full">
+              {mediaViewer.filename}
+            </div>
+          )}
+          <div onClick={(e) => e.stopPropagation()} className="max-w-[90vw] max-h-[85vh]">
+            {mediaViewer.type === 'image' ? (
+              <img src={mediaViewer.url} alt="" className="max-w-full max-h-[85vh] object-contain rounded-lg" />
+            ) : (
+              <video src={mediaViewer.url} controls autoPlay className="max-w-full max-h-[85vh] rounded-lg" />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Context Menu for Media Options */}
+      {mediaMenu && (
+        <div
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-gray-200 py-2 min-w-[180px]"
+          style={{ top: Math.min(mediaMenu.y, window.innerHeight - 200), left: Math.min(mediaMenu.x, window.innerWidth - 200) }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {(mediaMenu.type === 'image' || mediaMenu.type === 'video') && (
+            <button
+              onClick={() => { openMediaViewer(mediaMenu.url, mediaMenu.type as 'image' | 'video', mediaMenu.filename); setMediaMenu(null); }}
+              className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+            >
+              <ExternalLink size={16} className="text-emerald-600" />
+              Open in viewer
+            </button>
+          )}
+          <button
+            onClick={() => { downloadMedia(mediaMenu.url, mediaMenu.filename); setMediaMenu(null); }}
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+          >
+            <Download size={16} className="text-emerald-600" />
+            Download
+          </button>
+          <button
+            onClick={() => { shareMedia(mediaMenu.url, mediaMenu.filename); setMediaMenu(null); }}
+            className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+          >
+            <Share2 size={16} className="text-emerald-600" />
+            Share
+          </button>
+        </div>
+      )}
     </div>
   );
 }

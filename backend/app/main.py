@@ -369,7 +369,8 @@ async def send_message(
             if target_lang != current_user.default_language:
                 translated_text = translate_text(content, current_user.default_language, target_lang)
                 translated_audio_url = None
-                if message_type == "voice" and translated_text:
+                # Generate TTS audio for both text and voice messages
+                if translated_text:
                     audio_path = text_to_speech(translated_text, target_lang)
                     if audio_path:
                         translated_audio_url = f"/uploads/voice_translations/{os.path.basename(audio_path)}"
