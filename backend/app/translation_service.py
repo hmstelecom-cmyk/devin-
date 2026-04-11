@@ -3,6 +3,8 @@ from gtts import gTTS
 import os
 import uuid
 import logging
+import subprocess
+import speech_recognition as sr
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +136,64 @@ def text_to_speech(text: str, lang: str) -> str:
     except Exception as e:
         logger.error(f"TTS error: {e}")
         return ""
+
+
+def transcribe_audio(filepath: str, source_lang: str = "en") -> str:
+    """Transcribe audio file to text using Google Speech Recognition.
+    
+    Converts audio to WAV format first (required by speech_recognition),
+    then uses Google's free web speech API for transcription.
+    """
+    wav_path = ""
+    try:
+        # Convert to WAV using ffmpeg (handles webm, ogg, mp3, etc.)
+        wav_path = filepath.rsplit(".", 1)[0] + "_converted.wav"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", filepath, "-ar", "16000", "-ac", "1", "-f", "wav", wav_path],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode != 0:
+            logger.error(f"ffmpeg conversion failed: {result.stderr.decode()}")
+            return ""
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+
+        # Map language codes for Google Speech Recognition
+        speech_lang_map = {
+            "he": "he-IL", "ar": "ar-SA", "ja": "ja-JP", "ko": "ko-KR",
+            "zh-CN": "zh-CN", "zh-TW": "zh-TW", "hi": "hi-IN", "ru": "ru-RU",
+            "de": "de-DE", "fr": "fr-FR", "es": "es-ES", "pt": "pt-BR",
+            "it": "it-IT", "tr": "tr-TR", "nl": "nl-NL", "pl": "pl-PL",
+            "uk": "uk-UA", "el": "el-GR", "th": "th-TH", "vi": "vi-VN",
+            "id": "id-ID", "ms": "ms-MY", "sv": "sv-SE", "da": "da-DK",
+            "no": "nb-NO", "fi": "fi-FI", "cs": "cs-CZ", "ro": "ro-RO",
+            "hu": "hu-HU", "bg": "bg-BG", "hr": "hr-HR", "sk": "sk-SK",
+            "fa": "fa-IR", "ta": "ta-IN", "te": "te-IN", "bn": "bn-IN",
+            "ur": "ur-PK", "en": "en-US",
+        }
+        lang_code = speech_lang_map.get(source_lang, source_lang)
+
+        text = recognizer.recognize_google(audio_data, language=lang_code)
+        logger.info(f"Transcribed audio ({source_lang}): {text[:100]}...")
+        return text
+    except sr.UnknownValueError:
+        logger.warning("Speech recognition could not understand the audio")
+        return ""
+    except sr.RequestError as e:
+        logger.error(f"Speech recognition service error: {e}")
+        return ""
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        return ""
+    finally:
+        # Clean up converted WAV file
+        if wav_path and os.path.exists(wav_path):
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
 
 
 def get_supported_languages() -> dict:

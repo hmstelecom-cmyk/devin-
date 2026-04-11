@@ -346,40 +346,87 @@ export default function ChatWindow({
           {/* Voice message */}
           {msg.message_type === 'voice' && (
             <div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const audioUrl = !isMine && msg.translated_audio_url
-                      ? msg.translated_audio_url
-                      : msg.media_url || '';
-                    playAudio(audioUrl, msg.id);
-                  }}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center ${isMine ? 'bg-emerald-600' : 'bg-emerald-100'}`}
-                >
-                  {playingAudio === msg.id ? (
-                    <Pause size={14} className={isMine ? 'text-white' : 'text-emerald-600'} />
-                  ) : (
-                    <Play size={14} className={isMine ? 'text-white' : 'text-emerald-600'} />
-                  )}
-                </button>
-                <div className="flex-1">
-                  <div className={`h-1 rounded-full ${isMine ? 'bg-emerald-600' : 'bg-emerald-200'}`}>
-                    <div className={`h-1 rounded-full w-1/2 ${isMine ? 'bg-emerald-300' : 'bg-emerald-500'}`} />
+              {/* Translated audio player - shown to recipient when translation available */}
+              {!isMine && isTranslated && (msg.translated_audio_url || msg.translations?.find((t) => t.language === currentUser.default_language)?.translated_audio_url) && !showingOriginal && (
+                <div className="flex items-center gap-2 mb-1">
+                  <button
+                    onClick={() => {
+                      const transAudioUrl = msg.translated_audio_url || msg.translations?.find((t) => t.language === currentUser.default_language)?.translated_audio_url || '';
+                      playAudio(transAudioUrl, msg.id);
+                    }}
+                    className="w-8 h-8 rounded-full flex items-center justify-center bg-emerald-100"
+                  >
+                    {playingAudio === msg.id ? (
+                      <Pause size={14} className="text-emerald-600" />
+                    ) : (
+                      <Play size={14} className="text-emerald-600" />
+                    )}
+                  </button>
+                  <div className="flex-1">
+                    <div className="h-1 rounded-full bg-emerald-200">
+                      <div className="h-1 rounded-full w-1/2 bg-emerald-500" />
+                    </div>
+                    <p className="text-[10px] mt-0.5 text-emerald-600">🌐 Translated voice</p>
                   </div>
+                  <Volume2 size={14} className="text-emerald-500" />
                 </div>
-                <Mic size={14} className={isMine ? 'text-emerald-300' : 'text-emerald-500'} />
-              </div>
-              {msg.content && msg.content !== 'Voice message' && (
-                <p className="text-xs mt-1 opacity-80">{showingOriginal ? msg.original_content : msg.content}</p>
               )}
+
+              {/* Original audio player - always shown to sender, shown to recipient when toggled or no translation */}
+              {(isMine || showingOriginal || !isTranslated) && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => playAudio(msg.media_url || '', msg.id)}
+                    className={`w-8 h-8 rounded-full flex items-center justify-center ${isMine ? 'bg-emerald-600' : 'bg-emerald-100'}`}
+                  >
+                    {playingAudio === msg.id ? (
+                      <Pause size={14} className={isMine ? 'text-white' : 'text-emerald-600'} />
+                    ) : (
+                      <Play size={14} className={isMine ? 'text-white' : 'text-emerald-600'} />
+                    )}
+                  </button>
+                  <div className="flex-1">
+                    <div className={`h-1 rounded-full ${isMine ? 'bg-emerald-600' : 'bg-emerald-200'}`}>
+                      <div className={`h-1 rounded-full w-1/2 ${isMine ? 'bg-emerald-300' : 'bg-emerald-500'}`} />
+                    </div>
+                    {!isMine && showingOriginal && isTranslated && (
+                      <p className="text-[10px] mt-0.5 text-gray-400">🎤 Original voice</p>
+                    )}
+                  </div>
+                  <Mic size={14} className={isMine ? 'text-emerald-300' : 'text-emerald-500'} />
+                </div>
+              )}
+
+              {/* Transcribed text (translated or original) */}
+              {msg.content && msg.content !== 'Voice message' && (
+                <p className="text-xs mt-1 opacity-80 italic">
+                  "{showingOriginal ? msg.original_content : msg.content}"
+                </p>
+              )}
+
+              {/* Toggle original/translated controls */}
               {isTranslated && (
-                <button
-                  onClick={() => setShowOriginal(showingOriginal ? null : msg.id)}
-                  className={`flex items-center gap-1 mt-1 text-xs ${isMine ? 'text-emerald-200' : 'text-emerald-600'} hover:underline`}
-                >
-                  <Globe size={11} />
-                  {showingOriginal ? 'Translated' : 'Original'}
-                </button>
+                <div className="flex items-center gap-2 mt-1">
+                  <button
+                    onClick={() => setShowOriginal(showingOriginal ? null : msg.id)}
+                    className={`flex items-center gap-1 text-xs ${isMine ? 'text-emerald-200' : 'text-emerald-600'} hover:underline`}
+                  >
+                    <Globe size={11} />
+                    {showingOriginal ? 'Show translation' : 'Show original'}
+                  </button>
+                  {!showingOriginal && (
+                    <button
+                      onClick={() => speakMessage(msg)}
+                      className={`flex items-center gap-1 text-xs ${
+                        speakingMsg === msg.id ? 'text-emerald-700' : 'text-emerald-600'
+                      } hover:underline`}
+                      title="Listen to translated text"
+                    >
+                      <Volume2 size={11} className={speakingMsg === msg.id ? 'animate-pulse' : ''} />
+                      {speakingMsg === msg.id ? 'Playing...' : 'Listen'}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -525,6 +572,24 @@ export default function ChatWindow({
           </div>
         )}
 
+        {/* Recording indicator bar */}
+        {isRecording && (
+          <div className="flex items-center gap-3 mb-2 px-4 py-2.5 bg-red-50 rounded-xl border border-red-200 animate-pulse">
+            <div className="relative flex items-center justify-center">
+              <span className="absolute inline-flex h-4 w-4 rounded-full bg-red-400 opacity-75 animate-ping" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-red-600" />
+            </div>
+            <span className="text-red-600 font-medium text-sm flex-1">Recording voice message...</span>
+            <div className="flex items-center gap-1">
+              <span className="w-1 h-3 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1 h-4 bg-red-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1 h-3 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              <span className="w-1 h-5 bg-red-600 rounded-full animate-bounce" style={{ animationDelay: '100ms' }} />
+              <span className="w-1 h-3 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '250ms' }} />
+            </div>
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
           <button
             onClick={() => setShowAttachMenu(!showAttachMenu)}
@@ -533,19 +598,29 @@ export default function ChatWindow({
             <Paperclip size={22} />
           </button>
 
-          <div className="flex-1 bg-white rounded-2xl px-4 py-2 shadow-sm">
-            <textarea
-              value={text}
-              onChange={(e) => { setText(e.target.value); handleTyping(); }}
-              onKeyDown={handleKeyDown}
-              placeholder="Type a message"
-              rows={1}
-              className="w-full outline-none resize-none text-sm max-h-32"
-              style={{ lineHeight: '1.5' }}
-            />
-          </div>
+          {isRecording ? (
+            <div className="flex-1 bg-red-50 rounded-2xl px-4 py-2 shadow-sm border border-red-200 flex items-center gap-2">
+              <div className="relative">
+                <span className="absolute inline-flex h-2.5 w-2.5 rounded-full bg-red-400 opacity-75 animate-ping" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-red-600" />
+              </div>
+              <span className="text-red-500 text-sm font-medium">Recording...</span>
+            </div>
+          ) : (
+            <div className="flex-1 bg-white rounded-2xl px-4 py-2 shadow-sm">
+              <textarea
+                value={text}
+                onChange={(e) => { setText(e.target.value); handleTyping(); }}
+                onKeyDown={handleKeyDown}
+                placeholder="Type a message"
+                rows={1}
+                className="w-full outline-none resize-none text-sm max-h-32"
+                style={{ lineHeight: '1.5' }}
+              />
+            </div>
+          )}
 
-          {text.trim() ? (
+          {text.trim() && !isRecording ? (
             <button
               onClick={handleSend}
               disabled={sending}
@@ -557,10 +632,10 @@ export default function ChatWindow({
           ) : (
             <button
               onClick={isRecording ? stopRecording : startRecording}
-              className={`p-2.5 rounded-full text-white shadow-lg ${isRecording ? 'bg-red-500 animate-pulse' : ''}`}
+              className={`p-2.5 rounded-full text-white shadow-lg transition-all ${isRecording ? 'bg-red-500 scale-110' : ''}`}
               style={!isRecording ? { backgroundColor: '#075e54' } : {}}
             >
-              {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
+              {isRecording ? <MicOff size={20} className="animate-pulse" /> : <Mic size={20} />}
             </button>
           )}
         </div>

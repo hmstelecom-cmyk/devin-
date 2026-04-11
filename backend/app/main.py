@@ -37,6 +37,7 @@ from app.schemas import (
 from app.translation_service import (
     translate_text,
     text_to_speech,
+    transcribe_audio,
     get_supported_languages,
     UPLOAD_DIR,
 )
@@ -343,6 +344,7 @@ async def send_message(
     conv = await _get_conversation(conv_id, current_user, db)
     media_url = None
     media_filename = None
+    filepath = None
     if file:
         ext = os.path.splitext(file.filename)[1] if file.filename else ""
         unique_name = f"{uuid.uuid4().hex}{ext}"
@@ -353,6 +355,13 @@ async def send_message(
             f.write(file_content)
         media_url = f"/uploads/{subdir}/{unique_name}"
         media_filename = file.filename
+    # For voice messages, transcribe the audio to get actual text content
+    if message_type == "voice" and file and filepath:
+        transcribed = transcribe_audio(filepath, current_user.default_language)
+        if transcribed:
+            content = transcribed
+            logger.info(f"Voice transcription: {transcribed[:100]}")
+
     msg = Message(
         conversation_id=conv_id, sender_id=current_user.id, content=content,
         original_content=content, original_language=current_user.default_language,
