@@ -79,6 +79,7 @@ class MessageResponse(BaseModel):
     is_read: bool
     created_at: datetime
     translations: List[TranslationResponse] = []
+    translated_audio_url: Optional[str] = None
 
     class Config:
         from_attributes = True

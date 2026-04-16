@@ -144,21 +144,31 @@ def transcribe_audio(filepath: str, source_lang: str = "en") -> str:
     
     Converts audio to WAV format first (required by speech_recognition),
     then uses Google's free web speech API for transcription.
+    Includes retry with 'en-US' fallback if primary language fails.
     """
     wav_path = ""
     try:
         # Convert to WAV using ffmpeg (handles webm, ogg, mp3, etc.)
         wav_path = filepath.rsplit(".", 1)[0] + "_converted.wav"
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        logger.info(f"Transcribe: converting {filepath} to WAV using {ffmpeg_exe}")
         result = subprocess.run(
             [ffmpeg_exe, "-y", "-i", filepath, "-ar", "16000", "-ac", "1", "-f", "wav", wav_path],
             capture_output=True, timeout=30,
         )
         if result.returncode != 0:
-            logger.error(f"ffmpeg conversion failed: {result.stderr.decode()}")
+            logger.error(f"ffmpeg conversion failed (rc={result.returncode}): {result.stderr.decode()[:500]}")
+            return ""
+        
+        # Check WAV file size
+        wav_size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
+        logger.info(f"Transcribe: WAV file size = {wav_size} bytes")
+        if wav_size < 1000:
+            logger.warning(f"Transcribe: WAV file too small ({wav_size} bytes), audio may be empty")
             return ""
 
         recognizer = sr.Recognizer()
+        recognizer.energy_threshold = 300
         with sr.AudioFile(wav_path) as source:
             audio_data = recognizer.record(source)
 
@@ -176,18 +186,29 @@ def transcribe_audio(filepath: str, source_lang: str = "en") -> str:
             "ur": "ur-PK", "en": "en-US",
         }
         lang_code = speech_lang_map.get(source_lang, source_lang)
+        logger.info(f"Transcribe: attempting recognition with lang={lang_code}")
 
-        text = recognizer.recognize_google(audio_data, language=lang_code)
-        logger.info(f"Transcribed audio ({source_lang}): {text[:100]}...")
-        return text
-    except sr.UnknownValueError:
-        logger.warning("Speech recognition could not understand the audio")
-        return ""
+        try:
+            text = recognizer.recognize_google(audio_data, language=lang_code)
+            logger.info(f"Transcribed audio ({source_lang}/{lang_code}): {text[:200]}")
+            return text
+        except sr.UnknownValueError:
+            # If primary language fails, try with auto-detect / en-US as fallback
+            if lang_code != "en-US":
+                logger.warning(f"Transcription failed with {lang_code}, retrying with en-US fallback")
+                try:
+                    text = recognizer.recognize_google(audio_data, language="en-US")
+                    logger.info(f"Transcribed audio (fallback en-US): {text[:200]}")
+                    return text
+                except sr.UnknownValueError:
+                    logger.warning("Fallback en-US transcription also failed")
+                    return ""
+            return ""
     except sr.RequestError as e:
         logger.error(f"Speech recognition service error: {e}")
         return ""
     except Exception as e:
-        logger.error(f"Transcription error: {e}")
+        logger.error(f"Transcription error: {type(e).__name__}: {e}")
         return ""
     finally:
         # Clean up converted WAV file

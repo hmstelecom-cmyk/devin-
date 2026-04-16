@@ -3,6 +3,10 @@ import type { Message, User, Conversation } from '../types';
 import { sendMessage, getMediaUrl, markRead, forwardMessage } from '../services/api';
 import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download, X, Volume2, Share2, ExternalLink, Forward, Check, CheckCheck } from 'lucide-react';
 
+// RTL languages that need right-to-left text direction
+const RTL_LANGUAGES = new Set(['he', 'ar', 'ur', 'fa', 'ps', 'sd', 'yi']);
+const isRTL = (lang: string) => RTL_LANGUAGES.has(lang);
+
 interface ChatWindowProps {
   conversation: Conversation;
   messages: Message[];
@@ -274,6 +278,9 @@ export default function ChatWindow({
     const isMine = msg.sender_id === currentUser.id;
     const isTranslated = !isMine && msg.content !== msg.original_content && msg.original_language !== currentUser.default_language;
     const showingOriginal = showOriginal === msg.id;
+    // Determine text direction: for own messages use own language, for received use user's language (or original if showing original)
+    const contentLang = isMine ? currentUser.default_language : (showingOriginal ? (msg.original_language || '') : currentUser.default_language);
+    const textDir = isRTL(contentLang) ? 'rtl' as const : 'ltr' as const;
 
     return (
       <div key={msg.id} className={`flex mb-2 ${isMine ? 'justify-end' : 'justify-start'}`}>
@@ -312,7 +319,7 @@ export default function ChatWindow({
           {/* Text message */}
           {(msg.message_type === 'text') && (
             <div>
-              <p className="text-sm whitespace-pre-wrap break-words">
+              <p className="text-sm whitespace-pre-wrap break-words" dir={textDir} style={{ textAlign: textDir === 'rtl' ? 'right' : 'left' }}>
                 {showingOriginal ? msg.original_content : msg.content}
               </p>
               <div className="flex items-center gap-2 mt-1">
@@ -346,7 +353,8 @@ export default function ChatWindow({
           {/* Voice message */}
           {msg.message_type === 'voice' && (() => {
             const translatedAudioUrl = msg.translated_audio_url || msg.translations?.find((t) => t.language === currentUser.default_language)?.translated_audio_url || '';
-            const hasTranslatedAudio = !isMine && isTranslated && !!translatedAudioUrl;
+            // For voice messages, show translated audio whenever it exists (don't rely on text comparison)
+            const hasTranslatedAudio = !isMine && !!translatedAudioUrl && msg.original_language !== currentUser.default_language;
             const translatedPlayId = msg.id + 100000; // unique ID for translated audio player
 
             return (
@@ -375,7 +383,7 @@ export default function ChatWindow({
                     </div>
                     {/* Translated text */}
                     {msg.content && msg.content !== 'Voice message' && (
-                      <p className="text-xs mt-1 opacity-70 italic px-1">
+                      <p className="text-xs mt-1 opacity-70 italic px-1" dir={isRTL(currentUser.default_language) ? 'rtl' : 'ltr'} style={{ textAlign: isRTL(currentUser.default_language) ? 'right' : 'left' }}>
                         "{msg.content}"
                       </p>
                     )}
@@ -409,14 +417,14 @@ export default function ChatWindow({
 
                 {/* Original text - show for sender, or when no translated audio and has transcription */}
                 {!hasTranslatedAudio && msg.content && msg.content !== 'Voice message' && (
-                  <p className={`text-xs mt-1 opacity-70 italic px-1 ${isMine ? '' : ''}`}>
+                  <p className={`text-xs mt-1 opacity-70 italic px-1 ${isMine ? '' : ''}`} dir={isRTL(isMine ? currentUser.default_language : (msg.original_language || 'en')) ? 'rtl' : 'ltr'} style={{ textAlign: isRTL(isMine ? currentUser.default_language : (msg.original_language || 'en')) ? 'right' : 'left' }}>
                     "{msg.content}"
                   </p>
                 )}
 
                 {/* Show original text toggle for recipient with translation */}
                 {hasTranslatedAudio && msg.original_content && msg.original_content !== 'Voice message' && (
-                  <p className="text-xs mt-1 opacity-60 italic px-1 text-gray-500">
+                  <p className="text-xs mt-1 opacity-60 italic px-1 text-gray-500" dir={isRTL(msg.original_language || 'en') ? 'rtl' : 'ltr'} style={{ textAlign: isRTL(msg.original_language || 'en') ? 'right' : 'left' }}>
                     "{msg.original_content}"
                   </p>
                 )}
@@ -612,7 +620,8 @@ export default function ChatWindow({
                 placeholder="Type a message"
                 rows={1}
                 className="w-full outline-none resize-none text-sm max-h-32"
-                style={{ lineHeight: '1.5' }}
+                dir={isRTL(currentUser.default_language) ? 'rtl' : 'ltr'}
+                style={{ lineHeight: '1.5', textAlign: isRTL(currentUser.default_language) ? 'right' : 'left' }}
               />
             </div>
           )}

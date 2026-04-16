@@ -2,6 +2,10 @@ import { useState } from 'react';
 import type { Conversation, User } from '../types';
 import { Search, MessageSquarePlus, Settings, LogOut, CheckCheck } from 'lucide-react';
 
+// RTL languages that need right-to-left text direction
+const RTL_LANGUAGES = new Set(['he', 'ar', 'ur', 'fa', 'ps', 'sd', 'yi']);
+const isRTL = (lang: string) => RTL_LANGUAGES.has(lang);
+
 interface ConversationListProps {
   conversations: Conversation[];
   currentUser: User;
@@ -148,7 +152,7 @@ export default function ConversationList({
                       {conv.last_message && conv.last_message.sender_id === currentUser.id && (
                         <CheckCheck size={14} className={`flex-shrink-0 ${conv.last_message.is_read ? 'text-blue-500' : 'text-gray-400'}`} />
                       )}
-                      <span className="truncate">
+                      <span className="truncate" dir={conv.last_message && conv.last_message.message_type === 'text' && isRTL(currentUser.default_language) ? 'rtl' : 'ltr'}>
                         {conv.last_message
                           ? conv.last_message.message_type === 'voice'
                             ? '🎤 Voice message'

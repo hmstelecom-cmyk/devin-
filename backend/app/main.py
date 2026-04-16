@@ -6,6 +6,7 @@ from sqlalchemy import select, func, and_, or_, update
 from sqlalchemy.orm import selectinload
 from typing import Optional
 from datetime import datetime, timezone
+import asyncio
 import json
 import os
 import uuid
@@ -319,11 +320,13 @@ async def get_messages(
         sender_result = await db.execute(select(User).where(User.id == msg.sender_id))
         sender = sender_result.scalar_one_or_none()
         display_content = msg.content
+        translated_audio = None
         translations = []
         for t in msg.translations:
             translations.append(TranslationResponse(language=t.language, translated_text=t.translated_text, translated_audio_url=t.translated_audio_url))
             if t.language == current_user.default_language:
                 display_content = t.translated_text
+                translated_audio = t.translated_audio_url
         responses.append(MessageResponse(
             id=msg.id, conversation_id=msg.conversation_id, sender_id=msg.sender_id,
             sender_name=sender.display_name if sender else "", sender_avatar=sender.avatar_url if sender else "",
@@ -331,6 +334,7 @@ async def get_messages(
             original_language=msg.original_language, message_type=msg.message_type,
             media_url=msg.media_url, media_filename=msg.media_filename,
             is_read=msg.is_read, created_at=msg.created_at, translations=translations,
+            translated_audio_url=translated_audio,
         ))
     return responses
 
@@ -355,9 +359,10 @@ async def send_message(
             f.write(file_content)
         media_url = f"/uploads/{subdir}/{unique_name}"
         media_filename = file.filename
+    loop = asyncio.get_event_loop()
     # For voice messages, transcribe the audio to get actual text content
     if message_type == "voice" and file and filepath:
-        transcribed = transcribe_audio(filepath, current_user.default_language)
+        transcribed = await loop.run_in_executor(None, transcribe_audio, filepath, current_user.default_language)
         if transcribed:
             content = transcribed
             logger.info(f"Voice transcription success ({current_user.default_language}): {transcribed[:100]}")
@@ -383,7 +388,7 @@ async def send_message(
         for target_lang in member_languages:
             if target_lang != current_user.default_language:
                 try:
-                    translated_text = translate_text(content, current_user.default_language, target_lang)
+                    translated_text = await loop.run_in_executor(None, translate_text, content, current_user.default_language, target_lang)
                     logger.info(f"Translation {current_user.default_language}->{target_lang}: '{content[:50]}' -> '{translated_text[:50] if translated_text else ''}'")
                 except Exception as e:
                     logger.error(f"Translation failed {current_user.default_language}->{target_lang}: {e}")
@@ -392,7 +397,7 @@ async def send_message(
                 # Generate TTS audio for both text and voice messages
                 if translated_text:
                     try:
-                        audio_path = text_to_speech(translated_text, target_lang)
+                        audio_path = await loop.run_in_executor(None, text_to_speech, translated_text, target_lang)
                         if audio_path:
                             translated_audio_url = f"/uploads/voice_translations/{os.path.basename(audio_path)}"
                             logger.info(f"TTS generated for {target_lang}: {translated_audio_url}")
@@ -542,6 +547,7 @@ async def forward_message(
 async def mark_messages_read(
     conv_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
 ):
+    await _get_conversation(conv_id, current_user, db)
     await db.execute(
         update(Message).where(and_(
             Message.conversation_id == conv_id, Message.sender_id != current_user.id, Message.is_read == False,
