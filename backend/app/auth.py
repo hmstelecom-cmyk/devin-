@@ -9,7 +9,8 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models import User
 
-SECRET_KEY = "smartcomm-secret-key-change-in-production-2024"
+import os
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "smartcomm-secret-key-change-in-production-2024")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 

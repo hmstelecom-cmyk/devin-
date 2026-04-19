@@ -1,4 +1,4 @@
-import type { User, Conversation, Message, LoginResponse, Language } from '../types';
+import type { User, Conversation, Message, LoginResponse, Language, AdminUser, AdminStats, AdminConversation, AdminMedia, SupabaseConfig, CallSession } from '../types';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -75,6 +75,7 @@ export async function updateProfile(data: {
   status_text?: string;
   default_language?: string;
   avatar_url?: string;
+  notification_sound?: boolean;
 }): Promise<User> {
   const res = await fetch(`${API_URL}/api/auth/me`, {
     method: 'PUT',
@@ -177,4 +178,93 @@ export async function uploadFile(file: File): Promise<{ url: string; filename: s
   });
   if (!res.ok) throw new Error('Failed to upload file');
   return res.json();
+}
+
+// Admin API calls
+export async function getAdminStats(): Promise<AdminStats> {
+  const res = await fetch(`${API_URL}/api/admin/stats`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Admin access required');
+  return res.json();
+}
+
+export async function getAdminUsers(): Promise<AdminUser[]> {
+  const res = await fetch(`${API_URL}/api/admin/users`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Admin access required');
+  return res.json();
+}
+
+export async function updateUserRole(userId: number, role: string): Promise<void> {
+  const formData = new FormData();
+  formData.append('role', role);
+  const res = await fetch(`${API_URL}/api/admin/users/${userId}/role`, {
+    method: 'PUT', headers: authHeaders(), body: formData,
+  });
+  if (!res.ok) throw new Error('Failed to update role');
+}
+
+export async function getAdminConversations(): Promise<AdminConversation[]> {
+  const res = await fetch(`${API_URL}/api/admin/conversations`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Admin access required');
+  return res.json();
+}
+
+export async function getAdminMedia(): Promise<AdminMedia[]> {
+  const res = await fetch(`${API_URL}/api/admin/media`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Admin access required');
+  return res.json();
+}
+
+export async function getSupabaseConfig(): Promise<SupabaseConfig> {
+  const res = await fetch(`${API_URL}/api/admin/supabase`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Admin access required');
+  return res.json();
+}
+
+export async function updateSupabaseConfig(config: SupabaseConfig): Promise<void> {
+  const res = await fetch(`${API_URL}/api/admin/supabase`, {
+    method: 'PUT',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error('Failed to update Supabase config');
+}
+
+export async function testSupabaseConnection(): Promise<{ status: string; message: string }> {
+  const res = await fetch(`${API_URL}/api/admin/supabase/test`, {
+    method: 'POST', headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Admin access required');
+  return res.json();
+}
+
+// Call API calls
+export async function initiateCall(conversationId: number, calleeId: number, callType: 'audio' | 'video'): Promise<CallSession> {
+  const res = await fetch(`${API_URL}/api/calls`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversation_id: conversationId, callee_id: calleeId, call_type: callType }),
+  });
+  if (!res.ok) throw new Error('Failed to initiate call');
+  return res.json();
+}
+
+export async function answerCall(callId: number): Promise<void> {
+  const res = await fetch(`${API_URL}/api/calls/${callId}/answer`, {
+    method: 'PUT', headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to answer call');
+}
+
+export async function endCall(callId: number): Promise<void> {
+  const res = await fetch(`${API_URL}/api/calls/${callId}/end`, {
+    method: 'PUT', headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to end call');
+}
+
+export async function declineCall(callId: number): Promise<void> {
+  const res = await fetch(`${API_URL}/api/calls/${callId}/decline`, {
+    method: 'PUT', headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to decline call');
 }

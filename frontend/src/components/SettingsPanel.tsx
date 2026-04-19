@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { updateProfile, getLanguages, getMediaUrl } from '../services/api';
 import type { User, Language } from '../types';
-import { ArrowLeft, Globe, User as UserIcon, MessageSquare, Save, Camera } from 'lucide-react';
+import { ArrowLeft, Globe, User as UserIcon, MessageSquare, Save, Camera, Bell } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -18,6 +18,7 @@ export default function SettingsPanel({ user, onClose, onUserUpdate }: SettingsP
   const [languages, setLanguages] = useState<Language[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [notificationSound, setNotificationSound] = useState(user.notification_sound !== false);
   const [avatarUrl, setAvatarUrl] = useState(user.avatar_url);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -33,6 +34,7 @@ export default function SettingsPanel({ user, onClose, onUserUpdate }: SettingsP
         display_name: displayName,
         status_text: statusText,
         default_language: defaultLanguage,
+        notification_sound: notificationSound,
       });
       onUserUpdate(updated);
       setSaved(true);
@@ -162,6 +164,30 @@ export default function SettingsPanel({ user, onClose, onUserUpdate }: SettingsP
             </select>
             <p className="text-xs text-gray-500 mt-2">
               All incoming messages will be automatically translated to this language
+            </p>
+          </div>
+
+          {/* Notification sound toggle */}
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <label className="flex items-center justify-between cursor-pointer">
+              <div className="flex items-center gap-2">
+                <Bell size={16} className="text-emerald-600" />
+                <span className="text-sm font-medium text-gray-700">Notification Sound</span>
+              </div>
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={notificationSound}
+                  onChange={(e) => setNotificationSound(e.target.checked)}
+                  className="sr-only"
+                />
+                <div className={`w-11 h-6 rounded-full transition-colors ${notificationSound ? 'bg-emerald-500' : 'bg-gray-300'}`}>
+                  <div className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform mt-0.5 ${notificationSound ? 'translate-x-5.5 ml-[22px]' : 'translate-x-0.5 ml-[2px]'}`} />
+                </div>
+              </div>
+            </label>
+            <p className="text-xs text-gray-500 mt-2">
+              Play a sound when receiving new messages
             </p>
           </div>
 

@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import type { User, Conversation, Message, WSMessage } from './types';
-import { getMe, getConversations, getMessages } from './services/api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import type { User, Conversation, Message, WSMessage, CallSession } from './types';
+import { getMe, getConversations, getMessages, getMediaUrl, initiateCall, answerCall, endCall, declineCall } from './services/api';
 import { useWebSocket } from './hooks/useWebSocket';
 import AuthScreen from './components/AuthScreen';
 import ConversationList from './components/ConversationList';
@@ -8,8 +8,12 @@ import ChatWindow from './components/ChatWindow';
 import NewChatDialog from './components/NewChatDialog';
 import SettingsPanel from './components/SettingsPanel';
 import InstallPrompt from './components/InstallPrompt';
+import AdminDashboard from './components/AdminDashboard';
+import CallDialog from './components/CallDialog';
 
-type View = 'conversations' | 'newchat' | 'settings';
+type View = 'conversations' | 'newchat' | 'settings' | 'admin';
+
+const NOTIFICATION_SOUND_URL = '/notification.wav';
 
 function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
@@ -20,8 +24,23 @@ function App() {
   const [sideView, setSideView] = useState<View>('conversations');
   const [typingUsers, setTypingUsers] = useState<number[]>([]);
   const [isMobileChat, setIsMobileChat] = useState(false);
+  const [incomingCall, setIncomingCall] = useState<CallSession | null>(null);
+  const [activeCall, setActiveCall] = useState<CallSession | null>(null);
+  const notificationAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const isAuthenticated = !!token && !!currentUser;
+
+  useEffect(() => {
+    notificationAudioRef.current = new Audio(NOTIFICATION_SOUND_URL);
+    notificationAudioRef.current.volume = 0.5;
+  }, []);
+
+  const playNotificationSound = useCallback(() => {
+    if (currentUser?.notification_sound !== false && notificationAudioRef.current) {
+      notificationAudioRef.current.currentTime = 0;
+      notificationAudioRef.current.play().catch(() => {});
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     if (token) {
@@ -75,6 +94,26 @@ function App() {
         if (selectedConv && newMsg.conversation_id === selectedConv.id) {
           setMessages((prev) => [...prev, newMsg]);
         }
+        if (newMsg.sender_id !== currentUser?.id) {
+          if (!selectedConv || newMsg.conversation_id !== selectedConv.id) {
+            playNotificationSound();
+          }
+          if ('Notification' in window && Notification.permission === 'granted') {
+            const senderName = newMsg.sender_name || 'New Message';
+            const body = newMsg.message_type === 'voice' ? 'Voice message' :
+                         newMsg.message_type === 'image' ? 'Photo' :
+                         newMsg.message_type === 'video' ? 'Video' :
+                         newMsg.message_type === 'document' ? 'Document' :
+                         newMsg.content?.substring(0, 100) || 'New message';
+            const notification = new Notification(senderName, {
+              body,
+              icon: newMsg.sender_avatar ? getMediaUrl(newMsg.sender_avatar) : '/icon-192.png',
+              tag: `msg-${newMsg.id}`,
+              silent: true,
+            });
+            notification.onclick = () => { window.focus(); notification.close(); };
+          }
+        }
         loadConversations();
       } else if (msg.type === 'typing') {
         const data = msg.data as { user_id: number; conversation_id: number };
@@ -119,12 +158,30 @@ function App() {
               : null
           );
         }
+      } else if (msg.type === 'call') {
+        const callData = msg.data as unknown as CallSession;
+        if (callData.status === 'ringing' && callData.callee_id === currentUser?.id) {
+          setIncomingCall(callData);
+          playNotificationSound();
+        } else if (callData.status === 'active') {
+          setIncomingCall(null);
+          setActiveCall(callData);
+        } else if (callData.status === 'ended' || callData.status === 'declined' || callData.status === 'missed') {
+          setIncomingCall(null);
+          setActiveCall(null);
+        }
       }
     },
-    [selectedConv, loadConversations]
+    [selectedConv, loadConversations, currentUser, playNotificationSound]
   );
 
   const { sendWsMessage } = useWebSocket(handleWsMessage, isAuthenticated);
+
+  useEffect(() => {
+    if (isAuthenticated && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, [isAuthenticated]);
 
   const handleAuth = (newToken: string, user: User) => {
     setToken(newToken);
@@ -170,6 +227,30 @@ function App() {
     localStorage.setItem('user', JSON.stringify(user));
   };
 
+  const handleInitiateCall = async (calleeId: number, callType: 'audio' | 'video') => {
+    if (!selectedConv) return;
+    try {
+      const call = await initiateCall(selectedConv.id, calleeId, callType);
+      setActiveCall(call);
+    } catch { alert('Failed to start call'); }
+  };
+
+  const handleAnswerCall = async () => {
+    if (!incomingCall) return;
+    try { await answerCall(incomingCall.id); setActiveCall(incomingCall); setIncomingCall(null); }
+    catch { alert('Failed to answer call'); }
+  };
+
+  const handleDeclineCall = async () => {
+    if (!incomingCall) return;
+    try { await declineCall(incomingCall.id); } catch {} finally { setIncomingCall(null); }
+  };
+
+  const handleEndCall = async () => {
+    if (!activeCall) return;
+    try { await endCall(activeCall.id); } catch {} finally { setActiveCall(null); }
+  };
+
   if (!isAuthenticated) {
     return <AuthScreen onAuth={handleAuth} />;
   }
@@ -190,6 +271,7 @@ function App() {
             onNewChat={() => setSideView('newchat')}
             onSettings={() => setSideView('settings')}
             onLogout={handleLogout}
+            onAdmin={currentUser.role === 'admin' ? () => setSideView('admin') : undefined}
           />
         )}
         {sideView === 'newchat' && (
@@ -203,6 +285,12 @@ function App() {
             user={currentUser}
             onClose={() => setSideView('conversations')}
             onUserUpdate={handleUserUpdate}
+          />
+        )}
+        {sideView === 'admin' && (
+          <AdminDashboard
+            currentUser={currentUser}
+            onClose={() => setSideView('conversations')}
           />
         )}
       </div>
@@ -222,6 +310,7 @@ function App() {
             onBack={() => setIsMobileChat(false)}
             onSendTyping={handleSendTyping}
             typingUsers={typingUsers}
+            onInitiateCall={handleInitiateCall}
           />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center" style={{ backgroundColor: '#f0f2f5' }}>
@@ -248,6 +337,30 @@ function App() {
         )}
       </div>
       <InstallPrompt />
+
+      {incomingCall && (
+        <CallDialog
+          type="incoming"
+          callSession={incomingCall}
+          currentUser={currentUser}
+          conversations={conversations}
+          onAnswer={handleAnswerCall}
+          onDecline={handleDeclineCall}
+          onEnd={handleEndCall}
+        />
+      )}
+
+      {activeCall && (
+        <CallDialog
+          type="active"
+          callSession={activeCall}
+          currentUser={currentUser}
+          conversations={conversations}
+          onAnswer={handleAnswerCall}
+          onDecline={handleDeclineCall}
+          onEnd={handleEndCall}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Message, User, Conversation } from '../types';
 import { sendMessage, getMediaUrl, markRead, forwardMessage } from '../services/api';
-import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download, X, Volume2, Share2, ExternalLink, Forward, Check, CheckCheck } from 'lucide-react';
+import { Send, Paperclip, Mic, MicOff, ArrowLeft, Image, FileText, Film, Globe, Play, Pause, Download, X, Volume2, Share2, ExternalLink, Forward, Check, CheckCheck, Phone, Video } from 'lucide-react';
 
 // RTL languages that need right-to-left text direction
 const RTL_LANGUAGES = new Set(['he', 'ar', 'ur', 'fa', 'ps', 'sd', 'yi']);
@@ -16,6 +16,7 @@ interface ChatWindowProps {
   onBack: () => void;
   onSendTyping: () => void;
   typingUsers: number[];
+  onInitiateCall?: (calleeId: number, callType: 'audio' | 'video') => void;
 }
 
 export default function ChatWindow({
@@ -27,6 +28,7 @@ export default function ChatWindow({
   onBack,
   onSendTyping,
   typingUsers,
+  onInitiateCall,
 }: ChatWindowProps) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -534,6 +536,16 @@ export default function ChatWindow({
               : ''}
           </p>
         </div>
+        {onInitiateCall && otherUser && !conversation.is_group && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => onInitiateCall(otherUser.id, 'video')} className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-colors" title="Video Call">
+              <Video size={20} />
+            </button>
+            <button onClick={() => onInitiateCall(otherUser.id, 'audio')} className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-colors" title="Audio Call">
+              <Phone size={20} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Messages area */}

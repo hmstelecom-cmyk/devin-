@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Table
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Table, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.database import Base
@@ -22,6 +22,8 @@ class User(Base):
     avatar_url = Column(String(500), default="")
     status_text = Column(String(200), default="Hey there! I'm using SmartComm")
     default_language = Column(String(10), default="en")
+    role = Column(String(20), default="user")  # user, admin
+    notification_sound = Column(Boolean, default=True)
     is_online = Column(Boolean, default=False)
     last_seen = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -62,6 +64,7 @@ class Message(Base):
     is_forwarded = Column(Boolean, default=False)
     forwarded_from_name = Column(String(100), nullable=True)
     is_read = Column(Boolean, default=False)
+    is_delivered = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     sender = relationship("User", back_populates="messages")
@@ -79,3 +82,30 @@ class MessageTranslation(Base):
     translated_audio_url = Column(String(500), nullable=True)
 
     message = relationship("Message", back_populates="translations")
+
+
+class AdminSetting(Base):
+    __tablename__ = "admin_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String(100), unique=True, nullable=False)
+    value = Column(Text, default="")
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class CallSession(Base):
+    __tablename__ = "call_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
+    caller_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    callee_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    call_type = Column(String(10), default="audio")  # audio, video
+    status = Column(String(20), default="ringing")  # ringing, active, ended, missed, declined
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    caller = relationship("User", foreign_keys=[caller_id])
+    callee = relationship("User", foreign_keys=[callee_id])
+    conversation = relationship("Conversation")

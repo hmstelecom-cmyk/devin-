@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Conversation, User } from '../types';
-import { Search, MessageSquarePlus, Settings, LogOut, CheckCheck } from 'lucide-react';
+import { Search, MessageSquarePlus, Settings, LogOut, CheckCheck, Shield } from 'lucide-react';
 
 // RTL languages that need right-to-left text direction
 const RTL_LANGUAGES = new Set(['he', 'ar', 'ur', 'fa', 'ps', 'sd', 'yi']);
@@ -14,6 +14,7 @@ interface ConversationListProps {
   onNewChat: () => void;
   onSettings: () => void;
   onLogout: () => void;
+  onAdmin?: () => void;
 }
 
 export default function ConversationList({
@@ -24,6 +25,7 @@ export default function ConversationList({
   onNewChat,
   onSettings,
   onLogout,
+  onAdmin,
 }: ConversationListProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -77,6 +79,11 @@ export default function ConversationList({
           <button onClick={onNewChat} className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-colors" title="New Chat">
             <MessageSquarePlus size={22} />
           </button>
+          {onAdmin && (
+            <button onClick={onAdmin} className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-colors" title="Admin Dashboard">
+              <Shield size={22} />
+            </button>
+          )}
           <button onClick={onSettings} className="text-white/90 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-colors" title="Settings">
             <Settings size={22} />
           </button>

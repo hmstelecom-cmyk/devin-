@@ -13,7 +13,7 @@ import uuid
 import logging
 
 from app.database import get_db, init_db
-from app.models import User, Conversation, Message, MessageTranslation, conversation_members
+from app.models import User, Conversation, Message, MessageTranslation, conversation_members, AdminSetting, CallSession
 from app.auth import (
     get_password_hash,
     verify_password,
@@ -34,6 +34,13 @@ from app.schemas import (
     ConversationResponse,
     LanguageResponse,
     ForwardRequest,
+    AdminUserResponse,
+    AdminStatsResponse,
+    AdminSettingUpdate,
+    AdminSettingResponse,
+    SupabaseConfig,
+    CallSessionCreate,
+    CallSessionResponse,
 )
 from app.translation_service import (
     translate_text,
@@ -157,6 +164,8 @@ async def update_me(
         current_user.default_language = user_update.default_language
     if user_update.avatar_url is not None:
         current_user.avatar_url = user_update.avatar_url
+    if user_update.notification_sound is not None:
+        current_user.notification_sound = user_update.notification_sound
     await db.commit()
     await db.refresh(current_user)
     return UserResponse.model_validate(current_user)
@@ -292,7 +301,10 @@ async def _build_conversation_response(conv: Conversation, current_user: User, d
             content=display_content, original_content=last_msg.original_content or last_msg.content,
             original_language=last_msg.original_language, message_type=last_msg.message_type,
             media_url=last_msg.media_url, media_filename=last_msg.media_filename,
-            is_read=last_msg.is_read, created_at=last_msg.created_at,
+            is_forwarded=getattr(last_msg, 'is_forwarded', False),
+            forwarded_from_name=getattr(last_msg, 'forwarded_from_name', None),
+            is_read=last_msg.is_read, is_delivered=getattr(last_msg, 'is_delivered', False),
+            created_at=last_msg.created_at,
         )
     return ConversationResponse(
         id=conv.id, name=conv.name, is_group=conv.is_group,
@@ -333,7 +345,10 @@ async def get_messages(
             content=display_content, original_content=msg.original_content or msg.content,
             original_language=msg.original_language, message_type=msg.message_type,
             media_url=msg.media_url, media_filename=msg.media_filename,
-            is_read=msg.is_read, created_at=msg.created_at, translations=translations,
+            is_forwarded=getattr(msg, 'is_forwarded', False),
+            forwarded_from_name=getattr(msg, 'forwarded_from_name', None),
+            is_read=msg.is_read, is_delivered=getattr(msg, 'is_delivered', False),
+            created_at=msg.created_at, translations=translations,
             translated_audio_url=translated_audio,
         ))
     return responses
@@ -423,7 +438,7 @@ async def send_message(
         sender_name=sender.display_name if sender else "", sender_avatar=sender.avatar_url if sender else "",
         content=content, original_content=content, original_language=current_user.default_language,
         message_type=msg.message_type, media_url=msg.media_url, media_filename=msg.media_filename,
-        is_read=False, created_at=msg.created_at, translations=translations,
+        is_read=False, is_delivered=False, created_at=msg.created_at, translations=translations,
     )
     for member in conv.members:
         if member.id == current_user.id:
@@ -459,6 +474,18 @@ async def forward_message(
     if not original_msg:
         raise HTTPException(status_code=404, detail="Message not found")
 
+    # Verify current user is a member of the source conversation
+    source_member_check = await db.execute(
+        select(conversation_members).where(
+            and_(
+                conversation_members.c.user_id == current_user.id,
+                conversation_members.c.conversation_id == original_msg.conversation_id,
+            )
+        )
+    )
+    if not source_member_check.first():
+        raise HTTPException(status_code=403, detail="Not authorized to forward this message")
+
     # Get original sender name for the "Forwarded" label
     sender_result = await db.execute(select(User).where(User.id == original_msg.sender_id))
     original_sender = sender_result.scalar_one_or_none()
@@ -492,16 +519,24 @@ async def forward_message(
             if member.id != current_user.id:
                 member_languages.add(member.default_language)
 
+        loop = asyncio.get_event_loop()
         text_content = original_msg.original_content or original_msg.content
         if text_content and original_msg.message_type in ("text", "voice"):
             for target_lang in member_languages:
                 if target_lang != original_msg.original_language:
-                    translated_text = translate_text(text_content, original_msg.original_language, target_lang)
+                    try:
+                        translated_text = await loop.run_in_executor(None, translate_text, text_content, original_msg.original_language, target_lang)
+                    except Exception as e:
+                        logger.error(f"Forward translation failed {original_msg.original_language}->{target_lang}: {e}")
+                        translated_text = text_content
                     translated_audio_url = None
                     if translated_text:
-                        audio_path = text_to_speech(translated_text, target_lang)
-                        if audio_path:
-                            translated_audio_url = f"/uploads/voice_translations/{os.path.basename(audio_path)}"
+                        try:
+                            audio_path = await loop.run_in_executor(None, text_to_speech, translated_text, target_lang)
+                            if audio_path:
+                                translated_audio_url = f"/uploads/voice_translations/{os.path.basename(audio_path)}"
+                        except Exception as e:
+                            logger.error(f"Forward TTS failed for {target_lang}: {e}")
                     trans = MessageTranslation(
                         message_id=new_msg.id, language=target_lang,
                         translated_text=translated_text, translated_audio_url=translated_audio_url,
@@ -603,6 +638,275 @@ async def upload_avatar(
     current_user.avatar_url = avatar_url
     await db.commit()
     return {"avatar_url": avatar_url}
+
+
+# ============================================================
+# Admin endpoints
+# ============================================================
+
+async def _require_admin(current_user: User):
+    """Check if user is admin, raise 403 if not."""
+    if getattr(current_user, 'role', 'user') != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+@app.get("/api/admin/stats", response_model=AdminStatsResponse)
+async def admin_stats(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(current_user)
+    total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
+    online_users = (await db.execute(select(func.count(User.id)).where(User.is_online == True))).scalar() or 0
+    total_conversations = (await db.execute(select(func.count(Conversation.id)))).scalar() or 0
+    total_messages = (await db.execute(select(func.count(Message.id)))).scalar() or 0
+    total_media = (await db.execute(select(func.count(Message.id)).where(Message.message_type.in_(['image', 'video', 'document'])))).scalar() or 0
+    total_voice = (await db.execute(select(func.count(Message.id)).where(Message.message_type == 'voice'))).scalar() or 0
+    total_translations = (await db.execute(select(func.count(MessageTranslation.id)))).scalar() or 0
+    lang_result = await db.execute(select(User.default_language).distinct())
+    languages_in_use = [r[0] for r in lang_result.all()]
+    return AdminStatsResponse(
+        total_users=total_users, online_users=online_users,
+        total_conversations=total_conversations, total_messages=total_messages,
+        total_media_files=total_media, total_voice_messages=total_voice,
+        total_translations=total_translations, languages_in_use=languages_in_use,
+    )
+
+
+@app.get("/api/admin/users", response_model=list[AdminUserResponse])
+async def admin_users(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(current_user)
+    result = await db.execute(select(User).order_by(User.created_at.desc()))
+    users = result.scalars().all()
+    responses = []
+    for u in users:
+        msg_count = (await db.execute(select(func.count(Message.id)).where(Message.sender_id == u.id))).scalar() or 0
+        conv_count = (await db.execute(
+            select(func.count(conversation_members.c.conversation_id)).where(conversation_members.c.user_id == u.id)
+        )).scalar() or 0
+        responses.append(AdminUserResponse(
+            id=u.id, username=u.username, display_name=u.display_name,
+            avatar_url=u.avatar_url or "", status_text=u.status_text or "",
+            default_language=u.default_language, role=getattr(u, 'role', 'user') or 'user',
+            notification_sound=getattr(u, 'notification_sound', True),
+            is_online=u.is_online, last_seen=u.last_seen, created_at=u.created_at,
+            message_count=msg_count, conversation_count=conv_count,
+        ))
+    return responses
+
+
+@app.put("/api/admin/users/{user_id}/role")
+async def admin_update_role(
+    user_id: int, role: str = Form(...),
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(current_user)
+    if role not in ('user', 'admin'):
+        raise HTTPException(status_code=400, detail="Role must be 'user' or 'admin'")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.role = role
+    await db.commit()
+    return {"status": "ok", "user_id": user_id, "role": role}
+
+
+@app.get("/api/admin/conversations")
+async def admin_conversations(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(current_user)
+    result = await db.execute(
+        select(Conversation).options(selectinload(Conversation.members)).order_by(Conversation.updated_at.desc())
+    )
+    convs = result.scalars().unique().all()
+    responses = []
+    for conv in convs:
+        msg_count = (await db.execute(select(func.count(Message.id)).where(Message.conversation_id == conv.id))).scalar() or 0
+        responses.append({
+            "id": conv.id, "name": conv.name, "is_group": conv.is_group,
+            "member_count": len(conv.members),
+            "members": [{"id": m.id, "display_name": m.display_name, "username": m.username} for m in conv.members],
+            "message_count": msg_count,
+            "created_at": conv.created_at.isoformat() if conv.created_at else None,
+            "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+        })
+    return responses
+
+
+@app.get("/api/admin/media")
+async def admin_media(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(current_user)
+    result = await db.execute(
+        select(Message).where(Message.message_type.in_(['image', 'video', 'document', 'voice']))
+        .order_by(Message.created_at.desc()).limit(100)
+    )
+    messages = result.scalars().all()
+    media_files = []
+    for msg in messages:
+        sender_result = await db.execute(select(User).where(User.id == msg.sender_id))
+        sender = sender_result.scalar_one_or_none()
+        media_files.append({
+            "id": msg.id, "type": msg.message_type,
+            "url": msg.media_url, "filename": msg.media_filename,
+            "sender": sender.display_name if sender else "Unknown",
+            "conversation_id": msg.conversation_id,
+            "created_at": msg.created_at.isoformat() if msg.created_at else None,
+        })
+    return media_files
+
+
+# Supabase integration settings
+@app.get("/api/admin/supabase", response_model=SupabaseConfig)
+async def get_supabase_config(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(current_user)
+    config = SupabaseConfig()
+    result = await db.execute(select(AdminSetting).where(AdminSetting.key.like('supabase_%')))
+    settings = result.scalars().all()
+    for s in settings:
+        if hasattr(config, s.key):
+            val = s.value
+            if val in ('true', 'True', '1'):
+                val = True
+            elif val in ('false', 'False', '0'):
+                val = False
+            setattr(config, s.key, val)
+    return config
+
+
+@app.put("/api/admin/supabase")
+async def update_supabase_config(
+    config: SupabaseConfig,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(current_user)
+    for key, value in config.model_dump().items():
+        result = await db.execute(select(AdminSetting).where(AdminSetting.key == key))
+        setting = result.scalar_one_or_none()
+        if setting:
+            setting.value = str(value)
+        else:
+            db.add(AdminSetting(key=key, value=str(value)))
+    await db.commit()
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/supabase/test")
+async def test_supabase_connection(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    await _require_admin(current_user)
+    result = await db.execute(select(AdminSetting).where(AdminSetting.key == 'supabase_url'))
+    url_setting = result.scalar_one_or_none()
+    if not url_setting or not url_setting.value:
+        return {"status": "error", "message": "Supabase URL not configured"}
+    # Simple connectivity test
+    import urllib.request
+    try:
+        req = urllib.request.Request(url_setting.value + "/rest/v1/", method='HEAD')
+        result = await asyncio.get_event_loop().run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=5))
+        return {"status": "connected", "message": "Successfully connected to Supabase"}
+    except Exception as e:
+        return {"status": "error", "message": f"Connection failed: {str(e)}"}
+
+
+# ============================================================
+# Call endpoints (scaffolding)
+# ============================================================
+
+@app.post("/api/calls", response_model=CallSessionResponse)
+async def initiate_call(
+    call_data: CallSessionCreate,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """Initiate an audio or video call."""
+    call = CallSession(
+        conversation_id=call_data.conversation_id,
+        caller_id=current_user.id,
+        callee_id=call_data.callee_id,
+        call_type=call_data.call_type,
+        status="ringing",
+    )
+    db.add(call)
+    await db.commit()
+    await db.refresh(call)
+    # Notify callee via WebSocket
+    await manager.send_personal_message({
+        "type": "call",
+        "data": {
+            "action": "incoming",
+            "call_id": call.id,
+            "caller_id": current_user.id,
+            "caller_name": current_user.display_name,
+            "caller_avatar": current_user.avatar_url or "",
+            "call_type": call.call_type,
+            "conversation_id": call.conversation_id,
+        }
+    }, call_data.callee_id)
+    return CallSessionResponse.model_validate(call)
+
+
+@app.put("/api/calls/{call_id}/answer")
+async def answer_call(
+    call_id: int,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(CallSession).where(CallSession.id == call_id))
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if call.callee_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not the callee")
+    call.status = "active"
+    call.started_at = datetime.now(timezone.utc)
+    await db.commit()
+    await manager.send_personal_message({
+        "type": "call", "data": {"action": "answered", "call_id": call.id}
+    }, call.caller_id)
+    return {"status": "ok"}
+
+
+@app.put("/api/calls/{call_id}/end")
+async def end_call(
+    call_id: int,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(CallSession).where(CallSession.id == call_id))
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    call.status = "ended"
+    call.ended_at = datetime.now(timezone.utc)
+    await db.commit()
+    other_id = call.callee_id if current_user.id == call.caller_id else call.caller_id
+    await manager.send_personal_message({
+        "type": "call", "data": {"action": "ended", "call_id": call.id}
+    }, other_id)
+    return {"status": "ok"}
+
+
+@app.put("/api/calls/{call_id}/decline")
+async def decline_call(
+    call_id: int,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(CallSession).where(CallSession.id == call_id))
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    call.status = "declined"
+    call.ended_at = datetime.now(timezone.utc)
+    await db.commit()
+    await manager.send_personal_message({
+        "type": "call", "data": {"action": "declined", "call_id": call.id}
+    }, call.caller_id)
+    return {"status": "ok"}
 
 
 @app.websocket("/ws/{token}")

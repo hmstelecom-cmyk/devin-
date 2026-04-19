@@ -32,11 +32,20 @@ async def init_db():
 
         def _migrate(connection):
             inspector = sa_inspect(connection)
-            if "messages" in inspector.get_table_names():
+            tables = inspector.get_table_names()
+            if "messages" in tables:
                 existing_cols = {c["name"] for c in inspector.get_columns("messages")}
                 if "is_forwarded" not in existing_cols:
                     connection.execute(text("ALTER TABLE messages ADD COLUMN is_forwarded BOOLEAN DEFAULT 0"))
                 if "forwarded_from_name" not in existing_cols:
                     connection.execute(text("ALTER TABLE messages ADD COLUMN forwarded_from_name VARCHAR(100)"))
+                if "is_delivered" not in existing_cols:
+                    connection.execute(text("ALTER TABLE messages ADD COLUMN is_delivered BOOLEAN DEFAULT 0"))
+            if "users" in tables:
+                user_cols = {c["name"] for c in inspector.get_columns("users")}
+                if "role" not in user_cols:
+                    connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'user'"))
+                if "notification_sound" not in user_cols:
+                    connection.execute(text("ALTER TABLE users ADD COLUMN notification_sound BOOLEAN DEFAULT 1"))
 
         await conn.run_sync(_migrate)
