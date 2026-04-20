@@ -886,6 +886,8 @@ async def end_call(
     call = result.scalar_one_or_none()
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
+    if current_user.id not in (call.caller_id, call.callee_id):
+        raise HTTPException(status_code=403, detail="Not a participant in this call")
     call.status = "ended"
     call.ended_at = datetime.now(timezone.utc)
     await db.commit()
@@ -905,6 +907,8 @@ async def decline_call(
     call = result.scalar_one_or_none()
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
+    if current_user.id not in (call.caller_id, call.callee_id):
+        raise HTTPException(status_code=403, detail="Not a participant in this call")
     call.status = "declined"
     call.ended_at = datetime.now(timezone.utc)
     await db.commit()
