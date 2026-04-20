@@ -767,7 +767,8 @@ async def get_supabase_config(
 ):
     await _require_admin(current_user)
     config = SupabaseConfig()
-    result = await db.execute(select(AdminSetting).where(AdminSetting.key.like('supabase_%')))
+    all_config_keys = list(SupabaseConfig.model_fields.keys())
+    result = await db.execute(select(AdminSetting).where(AdminSetting.key.in_(all_config_keys)))
     settings = result.scalars().all()
     for s in settings:
         if hasattr(config, s.key):
@@ -840,9 +841,11 @@ async def initiate_call(
     await manager.send_personal_message({
         "type": "call",
         "data": {
-            "action": "incoming",
+            "status": "ringing",
+            "id": call.id,
             "call_id": call.id,
             "caller_id": current_user.id,
+            "callee_id": call_data.callee_id,
             "caller_name": current_user.display_name,
             "caller_avatar": current_user.avatar_url or "",
             "call_type": call.call_type,
@@ -867,7 +870,9 @@ async def answer_call(
     call.started_at = datetime.now(timezone.utc)
     await db.commit()
     await manager.send_personal_message({
-        "type": "call", "data": {"action": "answered", "call_id": call.id}
+        "type": "call", "data": {"status": "active", "id": call.id, "call_id": call.id,
+            "caller_id": call.caller_id, "callee_id": call.callee_id, "call_type": call.call_type,
+            "conversation_id": call.conversation_id}
     }, call.caller_id)
     return {"status": "ok"}
 
@@ -886,7 +891,7 @@ async def end_call(
     await db.commit()
     other_id = call.callee_id if current_user.id == call.caller_id else call.caller_id
     await manager.send_personal_message({
-        "type": "call", "data": {"action": "ended", "call_id": call.id}
+        "type": "call", "data": {"status": "ended", "id": call.id, "call_id": call.id}
     }, other_id)
     return {"status": "ok"}
 
@@ -904,7 +909,7 @@ async def decline_call(
     call.ended_at = datetime.now(timezone.utc)
     await db.commit()
     await manager.send_personal_message({
-        "type": "call", "data": {"action": "declined", "call_id": call.id}
+        "type": "call", "data": {"status": "declined", "id": call.id, "call_id": call.id}
     }, call.caller_id)
     return {"status": "ok"}
 
@@ -1009,3 +1014,27 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         manager.disconnect(user_id)
+        # Update online status and notify contacts (same as WebSocketDisconnect)
+        async for db in get_db():
+            result = await db.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+            if user:
+                user.is_online = False
+                user.last_seen = datetime.now(timezone.utc)
+                await db.commit()
+            conv_stmt = (
+                select(Conversation).join(conversation_members)
+                .where(conversation_members.c.user_id == user_id)
+                .options(selectinload(Conversation.members))
+            )
+            conv_result = await db.execute(conv_stmt)
+            conversations = conv_result.scalars().unique().all()
+            notified = set()
+            for conv in conversations:
+                for member in conv.members:
+                    if member.id != user_id and member.id not in notified:
+                        await manager.send_personal_message(
+                            {"type": "online_status", "data": {"user_id": user_id, "is_online": False}}, member.id,
+                        )
+                        notified.add(member.id)
+            break
