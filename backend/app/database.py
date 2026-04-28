@@ -47,5 +47,19 @@ async def init_db():
                     connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'user'"))
                 if "notification_sound" not in user_cols:
                     connection.execute(text("ALTER TABLE users ADD COLUMN notification_sound BOOLEAN DEFAULT 1"))
+            if "call_sessions" in tables:
+                call_cols = {c["name"] for c in inspector.get_columns("call_sessions")}
+                if "caller_peer_id" not in call_cols:
+                    connection.execute(text("ALTER TABLE call_sessions ADD COLUMN caller_peer_id VARCHAR(100)"))
+                if "callee_peer_id" not in call_cols:
+                    connection.execute(text("ALTER TABLE call_sessions ADD COLUMN callee_peer_id VARCHAR(100)"))
+                if "provider" not in call_cols:
+                    connection.execute(text("ALTER TABLE call_sessions ADD COLUMN provider VARCHAR(20) DEFAULT 'peerjs'"))
+                if "answered_at" not in call_cols:
+                    connection.execute(text("ALTER TABLE call_sessions ADD COLUMN answered_at DATETIME"))
+                if "duration_seconds" not in call_cols:
+                    connection.execute(text("ALTER TABLE call_sessions ADD COLUMN duration_seconds FLOAT"))
+                if "end_reason" not in call_cols:
+                    connection.execute(text("ALTER TABLE call_sessions ADD COLUMN end_reason VARCHAR(50)"))
 
         await conn.run_sync(_migrate)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { User, Conversation, Message, WSMessage, CallSession } from './types';
-import { getMe, getConversations, getMessages, getMediaUrl, initiateCall, answerCall, endCall, declineCall } from './services/api';
+import { getMe, getConversations, getMessages, getMediaUrl, initiateCall } from './services/api';
+import { callService } from './services/callService';
 import { useWebSocket } from './hooks/useWebSocket';
 import AuthScreen from './components/AuthScreen';
 import ConversationList from './components/ConversationList';
@@ -24,8 +25,7 @@ function App() {
   const [sideView, setSideView] = useState<View>('conversations');
   const [typingUsers, setTypingUsers] = useState<number[]>([]);
   const [isMobileChat, setIsMobileChat] = useState(false);
-  const [incomingCall, setIncomingCall] = useState<CallSession | null>(null);
-  const [activeCall, setActiveCall] = useState<CallSession | null>(null);
+  const [currentCall, setCurrentCall] = useState<CallSession | null>(null);
   const notificationAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const isAuthenticated = !!token && !!currentUser;
@@ -161,18 +161,22 @@ function App() {
       } else if (msg.type === 'call') {
         const callData = msg.data as unknown as CallSession;
         if (callData.status === 'ringing' && callData.callee_id === currentUser?.id) {
-          setIncomingCall(callData);
-          playNotificationSound();
-        } else if (callData.status === 'active') {
-          setIncomingCall(null);
-          setActiveCall(callData);
-        } else if (callData.status === 'ended' || callData.status === 'declined' || callData.status === 'missed') {
-          setIncomingCall(null);
-          setActiveCall(null);
+          // Incoming call for us
+          setCurrentCall(callData);
+        } else if (callData.status === 'active' && currentCall) {
+          // Call was answered - update with peer IDs
+          setCurrentCall((prev) => prev ? { ...prev, ...callData, status: 'active' } : callData);
+        } else if (callData.status === 'ended' || callData.status === 'declined' || callData.status === 'missed' || callData.status === 'cancelled') {
+          // Call ended by other party
+          callService.cleanup();
+          setCurrentCall(null);
+        } else if (currentCall && callData.callee_peer_id) {
+          // Peer ID update from callee
+          setCurrentCall((prev) => prev ? { ...prev, callee_peer_id: callData.callee_peer_id } : prev);
         }
       }
     },
-    [selectedConv, loadConversations, currentUser, playNotificationSound]
+    [selectedConv, loadConversations, currentUser, playNotificationSound, currentCall]
   );
 
   const { sendWsMessage } = useWebSocket(handleWsMessage, isAuthenticated);
@@ -231,25 +235,16 @@ function App() {
     if (!selectedConv) return;
     try {
       const call = await initiateCall(selectedConv.id, calleeId, callType);
-      setActiveCall(call);
-    } catch { alert('Failed to start call'); }
+      setCurrentCall(call);
+    } catch {
+      alert('Failed to start call');
+    }
   };
 
-  const handleAnswerCall = async () => {
-    if (!incomingCall) return;
-    try { await answerCall(incomingCall.id); setActiveCall(incomingCall); setIncomingCall(null); }
-    catch { alert('Failed to answer call'); }
-  };
-
-  const handleDeclineCall = async () => {
-    if (!incomingCall) return;
-    try { await declineCall(incomingCall.id); } catch {} finally { setIncomingCall(null); }
-  };
-
-  const handleEndCall = async () => {
-    if (!activeCall) return;
-    try { await endCall(activeCall.id); } catch {} finally { setActiveCall(null); }
-  };
+  const handleCallEnded = useCallback(() => {
+    setCurrentCall(null);
+    loadConversations();
+  }, [loadConversations]);
 
   if (!isAuthenticated) {
     return <AuthScreen onAuth={handleAuth} />;
@@ -338,27 +333,12 @@ function App() {
       </div>
       <InstallPrompt />
 
-      {incomingCall && (
+      {currentCall && (
         <CallDialog
-          type="incoming"
-          callSession={incomingCall}
+          callSession={currentCall}
           currentUser={currentUser}
           conversations={conversations}
-          onAnswer={handleAnswerCall}
-          onDecline={handleDeclineCall}
-          onEnd={handleEndCall}
-        />
-      )}
-
-      {activeCall && (
-        <CallDialog
-          type="active"
-          callSession={activeCall}
-          currentUser={currentUser}
-          conversations={conversations}
-          onAnswer={handleAnswerCall}
-          onDecline={handleDeclineCall}
-          onEnd={handleEndCall}
+          onCallEnded={handleCallEnded}
         />
       )}
     </div>

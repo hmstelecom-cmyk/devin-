@@ -1,4 +1,4 @@
-import type { User, Conversation, Message, LoginResponse, Language, AdminUser, AdminStats, AdminConversation, AdminMedia, SupabaseConfig, CallSession } from '../types';
+import type { User, Conversation, Message, LoginResponse, Language, AdminUser, AdminStats, AdminConversation, AdminMedia, SupabaseConfig, CallSession, CallPreferences } from '../types';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -238,21 +238,35 @@ export async function testSupabaseConnection(): Promise<{ status: string; messag
 }
 
 // Call API calls
-export async function initiateCall(conversationId: number, calleeId: number, callType: 'audio' | 'video'): Promise<CallSession> {
+export async function initiateCall(conversationId: number, calleeId: number, callType: 'audio' | 'video', callerPeerId?: string): Promise<CallSession> {
   const res = await fetch(`${API_URL}/api/calls`, {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversation_id: conversationId, callee_id: calleeId, call_type: callType }),
+    body: JSON.stringify({ conversation_id: conversationId, callee_id: calleeId, call_type: callType, caller_peer_id: callerPeerId }),
   });
-  if (!res.ok) throw new Error('Failed to initiate call');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to initiate call' }));
+    throw new Error(err.detail || 'Failed to initiate call');
+  }
   return res.json();
 }
 
-export async function answerCall(callId: number): Promise<void> {
+export async function registerPeerId(callId: number, peerId: string): Promise<CallSession> {
+  const res = await fetch(`${API_URL}/api/calls/${callId}/peer`, {
+    method: 'PUT',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ peer_id: peerId }),
+  });
+  if (!res.ok) throw new Error('Failed to register peer ID');
+  return res.json();
+}
+
+export async function answerCall(callId: number): Promise<CallSession> {
   const res = await fetch(`${API_URL}/api/calls/${callId}/answer`, {
     method: 'PUT', headers: authHeaders(),
   });
   if (!res.ok) throw new Error('Failed to answer call');
+  return res.json();
 }
 
 export async function endCall(callId: number): Promise<void> {
@@ -267,4 +281,47 @@ export async function declineCall(callId: number): Promise<void> {
     method: 'PUT', headers: authHeaders(),
   });
   if (!res.ok) throw new Error('Failed to decline call');
+}
+
+export async function cancelCall(callId: number): Promise<void> {
+  const res = await fetch(`${API_URL}/api/calls/${callId}/cancel`, {
+    method: 'PUT', headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to cancel call');
+}
+
+export async function getCallPreferences(): Promise<CallPreferences> {
+  const res = await fetch(`${API_URL}/api/call-preferences`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch call preferences');
+  return res.json();
+}
+
+export async function updateCallPreferences(data: { ringtone_type?: string; default_ringtone_key?: string }): Promise<CallPreferences> {
+  const res = await fetch(`${API_URL}/api/call-preferences`, {
+    method: 'PUT',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Failed to update call preferences');
+  return res.json();
+}
+
+export async function uploadRingtone(file: File): Promise<{ url: string; filename: string; size_bytes: number }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${API_URL}/api/call-preferences/ringtone`, {
+    method: 'POST', headers: authHeaders(), body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to upload ringtone' }));
+    throw new Error(err.detail || 'Failed to upload ringtone');
+  }
+  return res.json();
+}
+
+export async function deleteRingtone(): Promise<void> {
+  const res = await fetch(`${API_URL}/api/call-preferences/ringtone`, {
+    method: 'DELETE', headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete ringtone');
 }

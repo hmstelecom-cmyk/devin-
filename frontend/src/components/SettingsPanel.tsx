@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { updateProfile, getLanguages, getMediaUrl } from '../services/api';
-import type { User, Language } from '../types';
-import { ArrowLeft, Globe, User as UserIcon, MessageSquare, Save, Camera, Bell } from 'lucide-react';
+import { updateProfile, getLanguages, getMediaUrl, getCallPreferences, updateCallPreferences, uploadRingtone, deleteRingtone } from '../services/api';
+import type { User, Language, CallPreferences } from '../types';
+import { ArrowLeft, Globe, User as UserIcon, MessageSquare, Save, Camera, Bell, Phone, Upload, Play, Trash2, RotateCcw } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -22,9 +22,27 @@ export default function SettingsPanel({ user, onClose, onUserUpdate }: SettingsP
   const [avatarUrl, setAvatarUrl] = useState(user.avatar_url);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const ringtoneInputRef = useRef<HTMLInputElement>(null);
+  const [callPrefs, setCallPrefs] = useState<CallPreferences | null>(null);
+  const [selectedRingtone, setSelectedRingtone] = useState('classic');
+  const [previewingRingtone, setPreviewingRingtone] = useState<string | null>(null);
+  const [uploadingRingtone, setUploadingRingtone] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const DEFAULT_RINGTONES = [
+    { key: 'classic', label: 'Classic' },
+    { key: 'modern', label: 'Modern' },
+    { key: 'soft', label: 'Soft' },
+    { key: 'digital', label: 'Digital' },
+    { key: 'minimal', label: 'Minimal' },
+  ];
 
   useEffect(() => {
     getLanguages().then(setLanguages).catch(() => {});
+    getCallPreferences().then((prefs) => {
+      setCallPrefs(prefs);
+      setSelectedRingtone(prefs.default_ringtone_key || 'classic');
+    }).catch(() => {});
   }, []);
 
   const handleSave = async () => {
@@ -189,6 +207,178 @@ export default function SettingsPanel({ user, onClose, onUserUpdate }: SettingsP
             <p className="text-xs text-gray-500 mt-2">
               Play a sound when receiving new messages
             </p>
+          </div>
+
+          {/* Call Ringtone Settings */}
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-2 mb-3">
+              <Phone size={16} className="text-emerald-600" />
+              <span className="text-sm font-medium text-gray-700">Call Ringtone</span>
+            </div>
+
+            {/* Default ringtone selector */}
+            <div className="space-y-2 mb-3">
+              {DEFAULT_RINGTONES.map((rt) => (
+                <div key={rt.key} className="flex items-center justify-between py-1.5">
+                  <label className="flex items-center gap-2 cursor-pointer flex-1">
+                    <input
+                      type="radio"
+                      name="ringtone"
+                      checked={selectedRingtone === rt.key && (!callPrefs || callPrefs.ringtone_type === 'default')}
+                      onChange={() => {
+                        setSelectedRingtone(rt.key);
+                        updateCallPreferences({ ringtone_type: 'default', default_ringtone_key: rt.key })
+                          .then(setCallPrefs).catch(() => {});
+                      }}
+                      className="text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span className="text-sm text-gray-700">{rt.label}</span>
+                  </label>
+                  <button
+                    onClick={() => {
+                      if (previewingRingtone === rt.key) {
+                        previewAudioRef.current?.pause();
+                        setPreviewingRingtone(null);
+                      } else {
+                        if (previewAudioRef.current) previewAudioRef.current.pause();
+                        const audio = new Audio(`/ringtone-${rt.key}.mp3`);
+                        audio.onended = () => setPreviewingRingtone(null);
+                        audio.play().catch(() => {});
+                        previewAudioRef.current = audio;
+                        setPreviewingRingtone(rt.key);
+                      }
+                    }}
+                    className="p-1.5 rounded-full hover:bg-gray-100 transition-colors"
+                    title="Preview"
+                  >
+                    <Play size={14} className={previewingRingtone === rt.key ? 'text-emerald-600' : 'text-gray-400'} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Custom ringtone */}
+            <div className="border-t border-gray-100 pt-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-600">Custom Ringtone</span>
+                {callPrefs?.custom_ringtone_url && (
+                  <button
+                    onClick={() => {
+                      deleteRingtone().then(() => {
+                        setCallPrefs((prev) => prev ? { ...prev, ringtone_type: 'default', custom_ringtone_url: null, custom_ringtone_filename: null, custom_ringtone_size_bytes: null } : prev);
+                      }).catch(() => {});
+                    }}
+                    className="flex items-center gap-1 text-xs text-red-500 hover:text-red-600"
+                    title="Remove custom ringtone"
+                  >
+                    <Trash2 size={12} /> Remove
+                  </button>
+                )}
+              </div>
+
+              {callPrefs?.custom_ringtone_url ? (
+                <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+                  <label className="flex items-center gap-2 cursor-pointer flex-1">
+                    <input
+                      type="radio"
+                      name="ringtone"
+                      checked={callPrefs.ringtone_type === 'custom'}
+                      onChange={() => {
+                        updateCallPreferences({ ringtone_type: 'custom' })
+                          .then(setCallPrefs).catch(() => {});
+                      }}
+                      className="text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <div>
+                      <p className="text-sm text-gray-700">{callPrefs.custom_ringtone_filename}</p>
+                      <p className="text-xs text-gray-400">
+                        {callPrefs.custom_ringtone_size_bytes
+                          ? `${(callPrefs.custom_ringtone_size_bytes / 1024).toFixed(1)} KB`
+                          : ''}
+                      </p>
+                    </div>
+                  </label>
+                  <button
+                    onClick={() => {
+                      if (previewingRingtone === 'custom') {
+                        previewAudioRef.current?.pause();
+                        setPreviewingRingtone(null);
+                      } else {
+                        if (previewAudioRef.current) previewAudioRef.current.pause();
+                        const audio = new Audio(getMediaUrl(callPrefs.custom_ringtone_url!));
+                        audio.onended = () => setPreviewingRingtone(null);
+                        audio.play().catch(() => {});
+                        previewAudioRef.current = audio;
+                        setPreviewingRingtone('custom');
+                      }
+                    }}
+                    className="p-1.5 rounded-full hover:bg-gray-100"
+                    title="Preview"
+                  >
+                    <Play size={14} className={previewingRingtone === 'custom' ? 'text-emerald-600' : 'text-gray-400'} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => ringtoneInputRef.current?.click()}
+                  disabled={uploadingRingtone}
+                  className="w-full py-2 px-3 border-2 border-dashed border-gray-200 rounded-lg text-sm text-gray-500 hover:border-emerald-400 hover:text-emerald-600 transition-colors flex items-center justify-center gap-2"
+                >
+                  {uploadingRingtone ? (
+                    <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Upload size={14} />
+                  )}
+                  {uploadingRingtone ? 'Uploading...' : 'Upload custom ringtone'}
+                </button>
+              )}
+
+              {/* Reset to default */}
+              {callPrefs?.ringtone_type === 'custom' && (
+                <button
+                  onClick={() => {
+                    updateCallPreferences({ ringtone_type: 'default', default_ringtone_key: 'classic' })
+                      .then((prefs) => {
+                        setCallPrefs(prefs);
+                        setSelectedRingtone('classic');
+                      }).catch(() => {});
+                  }}
+                  className="mt-2 flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-700"
+                >
+                  <RotateCcw size={12} /> Reset to default
+                </button>
+              )}
+
+              <input
+                ref={ringtoneInputRef}
+                type="file"
+                accept=".mp3,.wav,.ogg,.m4a,audio/mpeg,audio/wav,audio/ogg,audio/mp4"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 2 * 1024 * 1024) {
+                    alert('Ringtone file must be under 2 MB');
+                    return;
+                  }
+                  setUploadingRingtone(true);
+                  try {
+                    await uploadRingtone(file);
+                    const prefs = await getCallPreferences();
+                    setCallPrefs(prefs);
+                  } catch (err) {
+                    alert(err instanceof Error ? err.message : 'Upload failed');
+                  } finally {
+                    setUploadingRingtone(false);
+                    if (ringtoneInputRef.current) ringtoneInputRef.current.value = '';
+                  }
+                }}
+              />
+
+              <p className="text-xs text-gray-400 mt-2">
+                Supported: .mp3, .wav, .ogg (max 2 MB)
+              </p>
+            </div>
           </div>
 
           <button

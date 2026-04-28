@@ -198,6 +198,7 @@ class CallSessionCreate(BaseModel):
     conversation_id: int
     callee_id: int
     call_type: str = "audio"  # audio, video
+    caller_peer_id: Optional[str] = None
 
 
 class CallSessionResponse(BaseModel):
@@ -206,13 +207,39 @@ class CallSessionResponse(BaseModel):
     caller_id: int
     callee_id: int
     call_type: str
+    provider: str = "peerjs"
     status: str
+    caller_peer_id: Optional[str] = None
+    callee_peer_id: Optional[str] = None
     started_at: Optional[datetime] = None
+    answered_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    end_reason: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class CallPeerIdUpdate(BaseModel):
+    peer_id: str
+
+
+class UserCallPreferenceResponse(BaseModel):
+    ringtone_type: str = "default"
+    default_ringtone_key: str = "classic"
+    custom_ringtone_url: Optional[str] = None
+    custom_ringtone_filename: Optional[str] = None
+    custom_ringtone_size_bytes: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class UserCallPreferenceUpdate(BaseModel):
+    ringtone_type: Optional[str] = None  # default, custom
+    default_ringtone_key: Optional[str] = None  # classic, modern, soft, digital, minimal
 
 
 # WebSocket message schemas

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Table, JSON
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Table, JSON, Float
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.database import Base
@@ -101,11 +101,46 @@ class CallSession(Base):
     caller_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     callee_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     call_type = Column(String(10), default="audio")  # audio, video
-    status = Column(String(20), default="ringing")  # ringing, active, ended, missed, declined
+    provider = Column(String(20), default="peerjs")
+    status = Column(String(20), default="ringing")  # ringing, active, ended, missed, declined, cancelled, failed, busy
+    caller_peer_id = Column(String(100), nullable=True)
+    callee_peer_id = Column(String(100), nullable=True)
     started_at = Column(DateTime, nullable=True)
+    answered_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    end_reason = Column(String(50), nullable=True)  # normal, declined, missed, cancelled, busy, failed
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     caller = relationship("User", foreign_keys=[caller_id])
     callee = relationship("User", foreign_keys=[callee_id])
     conversation = relationship("Conversation")
+
+
+class CallEvent(Base):
+    __tablename__ = "call_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    call_id = Column(Integer, ForeignKey("call_sessions.id"), nullable=False)
+    event_type = Column(String(50), nullable=False)  # initiated, ringing, accepted, rejected, cancelled, ended, failed, busy, peer_registered
+    from_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    to_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    payload_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    call = relationship("CallSession")
+
+
+class UserCallPreference(Base):
+    __tablename__ = "user_call_preferences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    ringtone_type = Column(String(20), default="default")  # default, custom
+    default_ringtone_key = Column(String(50), default="classic")  # classic, modern, soft, digital, minimal
+    custom_ringtone_url = Column(String(500), nullable=True)
+    custom_ringtone_filename = Column(String(255), nullable=True)
+    custom_ringtone_size_bytes = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User")

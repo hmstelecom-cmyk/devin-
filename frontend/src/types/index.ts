@@ -129,8 +129,22 @@ export interface CallSession {
   caller_id: number;
   callee_id: number;
   call_type: 'audio' | 'video';
-  status: 'ringing' | 'active' | 'ended' | 'missed' | 'declined';
+  provider: string;
+  status: 'ringing' | 'active' | 'ended' | 'missed' | 'declined' | 'cancelled' | 'failed' | 'busy';
+  caller_peer_id: string | null;
+  callee_peer_id: string | null;
   started_at: string | null;
+  answered_at: string | null;
   ended_at: string | null;
+  duration_seconds: number | null;
+  end_reason: string | null;
   created_at: string;
+}
+
+export interface CallPreferences {
+  ringtone_type: 'default' | 'custom';
+  default_ringtone_key: string;
+  custom_ringtone_url: string | null;
+  custom_ringtone_filename: string | null;
+  custom_ringtone_size_bytes: number | null;
 }

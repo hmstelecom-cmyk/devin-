@@ -13,7 +13,7 @@ import uuid
 import logging
 
 from app.database import get_db, init_db
-from app.models import User, Conversation, Message, MessageTranslation, conversation_members, AdminSetting, CallSession
+from app.models import User, Conversation, Message, MessageTranslation, conversation_members, AdminSetting, CallSession, CallEvent, UserCallPreference
 from app.auth import (
     get_password_hash,
     verify_password,
@@ -41,6 +41,9 @@ from app.schemas import (
     SupabaseConfig,
     CallSessionCreate,
     CallSessionResponse,
+    CallPeerIdUpdate,
+    UserCallPreferenceResponse,
+    UserCallPreferenceUpdate,
 )
 from app.translation_service import (
     translate_text,
@@ -599,14 +602,14 @@ async def list_languages():
 
 
 @app.post("/api/translate")
-async def translate_endpoint(text: str = Form(...), source_lang: str = Form("auto"), target_lang: str = Form("en")):
+async def translate_endpoint(text: str = Form(...), source_lang: str = Form("auto"), target_lang: str = Form("en"), current_user: User = Depends(get_current_user)):
     loop = asyncio.get_event_loop()
     translated = await loop.run_in_executor(None, translate_text, text, source_lang, target_lang)
     return {"original": text, "translated": translated, "target_lang": target_lang}
 
 
 @app.post("/api/tts")
-async def tts_endpoint(text: str = Form(...), lang: str = Form("en")):
+async def tts_endpoint(text: str = Form(...), lang: str = Form("en"), current_user: User = Depends(get_current_user)):
     loop = asyncio.get_event_loop()
     filepath = await loop.run_in_executor(None, text_to_speech, text, lang)
     if not filepath:
@@ -820,8 +823,11 @@ async def test_supabase_connection(
 
 
 # ============================================================
-# Call endpoints (scaffolding)
+# Call endpoints (PeerJS-based)
 # ============================================================
+
+CALL_TIMEOUT_SECONDS = 30
+
 
 @app.post("/api/calls", response_model=CallSessionResponse)
 async def initiate_call(
@@ -829,16 +835,37 @@ async def initiate_call(
     current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
 ):
     """Initiate an audio or video call."""
+    # Check if callee is already in an active call
+    active_call_result = await db.execute(
+        select(CallSession).where(
+            and_(
+                or_(
+                    CallSession.caller_id == call_data.callee_id,
+                    CallSession.callee_id == call_data.callee_id,
+                ),
+                CallSession.status.in_(["ringing", "active"]),
+            )
+        )
+    )
+    if active_call_result.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="User is busy")
+
     call = CallSession(
         conversation_id=call_data.conversation_id,
         caller_id=current_user.id,
         callee_id=call_data.callee_id,
         call_type=call_data.call_type,
         status="ringing",
+        caller_peer_id=call_data.caller_peer_id,
     )
     db.add(call)
     await db.commit()
     await db.refresh(call)
+
+    # Log call event
+    db.add(CallEvent(call_id=call.id, event_type="initiated", from_user_id=current_user.id, to_user_id=call_data.callee_id))
+    await db.commit()
+
     # Notify callee via WebSocket
     await manager.send_personal_message({
         "type": "call",
@@ -852,8 +879,79 @@ async def initiate_call(
             "caller_avatar": current_user.avatar_url or "",
             "call_type": call.call_type,
             "conversation_id": call.conversation_id,
+            "caller_peer_id": call.caller_peer_id or "",
         }
     }, call_data.callee_id)
+
+    # Schedule timeout
+    async def _timeout_call():
+        await asyncio.sleep(CALL_TIMEOUT_SECONDS)
+        async for sess in get_db():
+            r = await sess.execute(select(CallSession).where(CallSession.id == call.id))
+            c = r.scalar_one_or_none()
+            if c and c.status == "ringing":
+                c.status = "missed"
+                c.ended_at = datetime.now(timezone.utc)
+                c.end_reason = "missed"
+                sess.add(CallEvent(call_id=c.id, event_type="missed", from_user_id=c.callee_id))
+                await sess.commit()
+                await manager.send_personal_message(
+                    {"type": "call", "data": {"status": "missed", "id": c.id, "call_id": c.id, "call_type": c.call_type, "conversation_id": c.conversation_id}},
+                    c.caller_id,
+                )
+                await manager.send_personal_message(
+                    {"type": "call", "data": {"status": "missed", "id": c.id, "call_id": c.id, "call_type": c.call_type, "conversation_id": c.conversation_id}},
+                    c.callee_id,
+                )
+                # Insert system message for missed call
+                label = f"Missed {'video' if c.call_type == 'video' else 'voice'} call"
+                sys_msg = Message(conversation_id=c.conversation_id, sender_id=c.caller_id, content=label, original_content=label, message_type="system")
+                sess.add(sys_msg)
+                await sess.commit()
+            break
+    asyncio.create_task(_timeout_call())
+
+    return CallSessionResponse.model_validate(call)
+
+
+@app.put("/api/calls/{call_id}/peer", response_model=CallSessionResponse)
+async def register_peer_id(
+    call_id: int,
+    body: CallPeerIdUpdate,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """Register a PeerJS peer ID for a call participant."""
+    result = await db.execute(select(CallSession).where(CallSession.id == call_id))
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if current_user.id not in (call.caller_id, call.callee_id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+
+    if current_user.id == call.caller_id:
+        call.caller_peer_id = body.peer_id
+    else:
+        call.callee_peer_id = body.peer_id
+
+    db.add(CallEvent(call_id=call.id, event_type="peer_registered", from_user_id=current_user.id, payload_json=json.dumps({"peer_id": body.peer_id})))
+    await db.commit()
+    await db.refresh(call)
+
+    # Notify the other participant of peer ID
+    other_id = call.callee_id if current_user.id == call.caller_id else call.caller_id
+    await manager.send_personal_message({
+        "type": "call",
+        "data": {
+            "status": "peer_registered",
+            "id": call.id,
+            "call_id": call.id,
+            "peer_id": body.peer_id,
+            "from_user_id": current_user.id,
+            "caller_peer_id": call.caller_peer_id or "",
+            "callee_peer_id": call.callee_peer_id or "",
+        }
+    }, other_id)
+
     return CallSessionResponse.model_validate(call)
 
 
@@ -868,15 +966,25 @@ async def answer_call(
         raise HTTPException(status_code=404, detail="Call not found")
     if call.callee_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not the callee")
+    if call.status != "ringing":
+        raise HTTPException(status_code=400, detail=f"Call is {call.status}, cannot answer")
     call.status = "active"
-    call.started_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    call.answered_at = now
+    call.started_at = now
+    db.add(CallEvent(call_id=call.id, event_type="accepted", from_user_id=current_user.id))
     await db.commit()
+    await db.refresh(call)
     await manager.send_personal_message({
-        "type": "call", "data": {"status": "active", "id": call.id, "call_id": call.id,
+        "type": "call", "data": {
+            "status": "active", "id": call.id, "call_id": call.id,
             "caller_id": call.caller_id, "callee_id": call.callee_id, "call_type": call.call_type,
-            "conversation_id": call.conversation_id}
+            "conversation_id": call.conversation_id,
+            "caller_peer_id": call.caller_peer_id or "",
+            "callee_peer_id": call.callee_peer_id or "",
+        }
     }, call.caller_id)
-    return {"status": "ok"}
+    return CallSessionResponse.model_validate(call)
 
 
 @app.put("/api/calls/{call_id}/end")
@@ -890,13 +998,27 @@ async def end_call(
         raise HTTPException(status_code=404, detail="Call not found")
     if current_user.id not in (call.caller_id, call.callee_id):
         raise HTTPException(status_code=403, detail="Not a participant in this call")
+    now = datetime.now(timezone.utc)
     call.status = "ended"
-    call.ended_at = datetime.now(timezone.utc)
+    call.ended_at = now
+    call.end_reason = "normal"
+    if call.answered_at:
+        call.duration_seconds = (now - call.answered_at).total_seconds()
+    db.add(CallEvent(call_id=call.id, event_type="ended", from_user_id=current_user.id))
     await db.commit()
     other_id = call.callee_id if current_user.id == call.caller_id else call.caller_id
     await manager.send_personal_message({
-        "type": "call", "data": {"status": "ended", "id": call.id, "call_id": call.id}
+        "type": "call", "data": {"status": "ended", "id": call.id, "call_id": call.id, "end_reason": "normal"}
     }, other_id)
+    # Insert system message
+    dur = ""
+    if call.duration_seconds and call.duration_seconds > 0:
+        m, s = divmod(int(call.duration_seconds), 60)
+        dur = f" · {m:02d}:{s:02d}"
+    label = f"{'Video' if call.call_type == 'video' else 'Voice'} call ended{dur}"
+    sys_msg = Message(conversation_id=call.conversation_id, sender_id=current_user.id, content=label, original_content=label, message_type="system")
+    db.add(sys_msg)
+    await db.commit()
     return {"status": "ok"}
 
 
@@ -913,10 +1035,153 @@ async def decline_call(
         raise HTTPException(status_code=403, detail="Not a participant in this call")
     call.status = "declined"
     call.ended_at = datetime.now(timezone.utc)
+    call.end_reason = "declined"
+    db.add(CallEvent(call_id=call.id, event_type="rejected", from_user_id=current_user.id))
+    await db.commit()
+    other_id = call.callee_id if current_user.id == call.caller_id else call.caller_id
+    await manager.send_personal_message({
+        "type": "call", "data": {"status": "declined", "id": call.id, "call_id": call.id, "end_reason": "declined"}
+    }, other_id)
+    # Insert system message
+    label = f"{'Video' if call.call_type == 'video' else 'Voice'} call declined"
+    sys_msg = Message(conversation_id=call.conversation_id, sender_id=current_user.id, content=label, original_content=label, message_type="system")
+    db.add(sys_msg)
+    await db.commit()
+    return {"status": "ok"}
+
+
+@app.put("/api/calls/{call_id}/cancel")
+async def cancel_call(
+    call_id: int,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """Cancel a ringing call (caller only)."""
+    result = await db.execute(select(CallSession).where(CallSession.id == call_id))
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if call.caller_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the caller can cancel")
+    if call.status != "ringing":
+        raise HTTPException(status_code=400, detail=f"Call is {call.status}, cannot cancel")
+    call.status = "cancelled"
+    call.ended_at = datetime.now(timezone.utc)
+    call.end_reason = "cancelled"
+    db.add(CallEvent(call_id=call.id, event_type="cancelled", from_user_id=current_user.id))
     await db.commit()
     await manager.send_personal_message({
-        "type": "call", "data": {"status": "declined", "id": call.id, "call_id": call.id}
-    }, call.caller_id)
+        "type": "call", "data": {"status": "cancelled", "id": call.id, "call_id": call.id, "end_reason": "cancelled"}
+    }, call.callee_id)
+    return {"status": "ok"}
+
+
+@app.get("/api/calls/{call_id}", response_model=CallSessionResponse)
+async def get_call(
+    call_id: int,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(CallSession).where(CallSession.id == call_id))
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if current_user.id not in (call.caller_id, call.callee_id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+    return CallSessionResponse.model_validate(call)
+
+
+# ============================================================
+# Ringtone / Call preferences endpoints
+# ============================================================
+
+RINGTONE_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "ringtones")
+os.makedirs(RINGTONE_UPLOAD_DIR, exist_ok=True)
+MAX_RINGTONE_SIZE = 2 * 1024 * 1024  # 2 MB
+ALLOWED_RINGTONE_TYPES = {".mp3", ".wav", ".ogg", ".m4a"}
+
+
+@app.get("/api/call-preferences", response_model=UserCallPreferenceResponse)
+async def get_call_preferences(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(UserCallPreference).where(UserCallPreference.user_id == current_user.id))
+    pref = result.scalar_one_or_none()
+    if not pref:
+        pref = UserCallPreference(user_id=current_user.id)
+        db.add(pref)
+        await db.commit()
+        await db.refresh(pref)
+    return UserCallPreferenceResponse.model_validate(pref)
+
+
+@app.put("/api/call-preferences", response_model=UserCallPreferenceResponse)
+async def update_call_preferences(
+    data: UserCallPreferenceUpdate,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(UserCallPreference).where(UserCallPreference.user_id == current_user.id))
+    pref = result.scalar_one_or_none()
+    if not pref:
+        pref = UserCallPreference(user_id=current_user.id)
+        db.add(pref)
+        await db.commit()
+        await db.refresh(pref)
+    if data.ringtone_type is not None:
+        pref.ringtone_type = data.ringtone_type
+    if data.default_ringtone_key is not None:
+        pref.default_ringtone_key = data.default_ringtone_key
+    await db.commit()
+    await db.refresh(pref)
+    return UserCallPreferenceResponse.model_validate(pref)
+
+
+@app.post("/api/call-preferences/ringtone")
+async def upload_ringtone(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """Upload a custom ringtone file. Max 2MB. Formats: mp3, wav, ogg, m4a."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_RINGTONE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unsupported format. Allowed: {', '.join(ALLOWED_RINGTONE_TYPES)}")
+    content = await file.read()
+    if len(content) > MAX_RINGTONE_SIZE:
+        raise HTTPException(status_code=400, detail=f"File too large. Maximum size is {MAX_RINGTONE_SIZE // (1024*1024)} MB")
+    filename = f"ringtone_{current_user.id}_{uuid.uuid4().hex[:8]}{ext}"
+    filepath = os.path.join(RINGTONE_UPLOAD_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(content)
+    url = f"/uploads/ringtones/{filename}"
+    # Update preferences
+    result = await db.execute(select(UserCallPreference).where(UserCallPreference.user_id == current_user.id))
+    pref = result.scalar_one_or_none()
+    if not pref:
+        pref = UserCallPreference(user_id=current_user.id)
+        db.add(pref)
+    pref.ringtone_type = "custom"
+    pref.custom_ringtone_url = url
+    pref.custom_ringtone_filename = file.filename or filename
+    pref.custom_ringtone_size_bytes = len(content)
+    await db.commit()
+    await db.refresh(pref)
+    return {"url": url, "filename": pref.custom_ringtone_filename, "size_bytes": len(content)}
+
+
+@app.delete("/api/call-preferences/ringtone")
+async def delete_ringtone(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """Remove custom ringtone and reset to default."""
+    result = await db.execute(select(UserCallPreference).where(UserCallPreference.user_id == current_user.id))
+    pref = result.scalar_one_or_none()
+    if pref and pref.custom_ringtone_url:
+        fpath = os.path.join(UPLOAD_DIR, pref.custom_ringtone_url.lstrip("/uploads/"))
+        if os.path.exists(fpath):
+            os.remove(fpath)
+        pref.ringtone_type = "default"
+        pref.custom_ringtone_url = None
+        pref.custom_ringtone_filename = None
+        pref.custom_ringtone_size_bytes = None
+        await db.commit()
     return {"status": "ok"}
 
 
