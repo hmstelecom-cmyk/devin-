@@ -1,0 +1,18 @@
+{
+  "name": "SmartComm - Smart Communication",
+  "short_name": "SmartComm",
+  "description": "WhatsApp-like smart communication platform with auto-translation",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#075e54",
+  "theme_color": "#075e54",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
