@@ -600,13 +600,15 @@ async def list_languages():
 
 @app.post("/api/translate")
 async def translate_endpoint(text: str = Form(...), source_lang: str = Form("auto"), target_lang: str = Form("en")):
-    translated = translate_text(text, source_lang, target_lang)
+    loop = asyncio.get_event_loop()
+    translated = await loop.run_in_executor(None, translate_text, text, source_lang, target_lang)
     return {"original": text, "translated": translated, "target_lang": target_lang}
 
 
 @app.post("/api/tts")
 async def tts_endpoint(text: str = Form(...), lang: str = Form("en")):
-    filepath = text_to_speech(text, lang)
+    loop = asyncio.get_event_loop()
+    filepath = await loop.run_in_executor(None, text_to_speech, text, lang)
     if not filepath:
         raise HTTPException(status_code=500, detail="TTS generation failed")
     filename = os.path.basename(filepath)

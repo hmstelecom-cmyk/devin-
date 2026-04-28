@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Conversation, User } from '../types';
+import { getMediaUrl } from '../services/api';
 import { Search, MessageSquarePlus, Settings, LogOut, CheckCheck, Shield } from 'lucide-react';
 
 // RTL languages that need right-to-left text direction
@@ -133,7 +134,7 @@ export default function ConversationList({
                 {/* Avatar */}
                 <div className="relative flex-shrink-0">
                   {avatar ? (
-                    <img src={avatar} alt={name} className="w-12 h-12 rounded-full object-cover" />
+                    <img src={getMediaUrl(avatar)} alt={name} className="w-12 h-12 rounded-full object-cover" />
                   ) : (
                     <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-sm" style={{ backgroundColor: '#25d366' }}>
                       {getInitials(name)}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getUsers, createConversation } from '../services/api';
+import { getUsers, createConversation, getMediaUrl } from '../services/api';
 import type { User, Conversation } from '../types';
 import { Search, X, UserPlus, ArrowLeft } from 'lucide-react';
 
@@ -97,7 +97,7 @@ export default function NewChatDialog({ onClose, onChatCreated }: NewChatDialogP
             >
               <div className="relative">
                 {user.avatar_url ? (
-                  <img src={user.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover" />
+                  <img src={getMediaUrl(user.avatar_url)} alt="" className="w-12 h-12 rounded-full object-cover" />
                 ) : (
                   <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold" style={{ backgroundColor: '#25d366' }}>
                     {getInitials(user.display_name)}
